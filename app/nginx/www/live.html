@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="format-detection" content="telephone=no,email=no,adress=no">
+<title>Live</title> 
+<script src="js/eventemitter2.min.js"></script>
+<script src="js/roslib.min.js"></script>
+<script src="js/cameraclient.js"></script>
+<script>
+// util function for URL query string 
+function qs(search_for) {
+  var query = window.location.search.substring(1);
+  var params = query.split('&');
+  for (var i=0; i<params.length; i++) {
+    var pos = params[i].indexOf('=');
+    if (pos > 0  && search_for == params[i].substring(0, pos)) {
+      return params[i].substring(pos+1);;
+    }
+  }
+  return "";
+}
+
+// http://192.168.1.225:8085/camera/live.html
+var hostname = window.location.hostname;
+if (!hostname) hostname = "127.0.0.1"; 
+
+var footage_id = qs("footage_id");
+var footage_location = qs("footage_location"); 
+
+// connection to camera device  
+var connection = new CameraConnection(
+  function(error) { // error
+    console.log(error);
+    onConnected(false); 
+  }, 
+  function() { // connected
+    console.log('Connected!');
+    onConnected(true); 
+  }, 
+  function() { // close 
+    console.log('Connection closed');
+    onConnected(false);
+  }
+);
+
+// RPC service 
+var footage = new Footage(connection); 
+var recorder = new Recorder(connection);
+
+// connect to camera 
+function connect() {
+  console.log("Connecting to: " + hostname); 
+  connection.connect(hostname);
+}
+
+// on connection status 
+function onConnected(connected) {
+  console.log("connected: " + connected);
+  if (connected) {
+    // enable streaming 
+    start_streaming();
+    // do an initial status update  
+    updateStatus();
+    // subscribe status notification 
+    recorder.subscribe(function(status_message) {
+      onRecorderMessage(status_message); 
+    });
+  } 
+}
+
+// on recorder status notification 
+function onRecorderMessage(status_message) {
+  // console.log("on recorder message..."); 
+  // console.log(status_message)
+  for (const notification of status_message) {
+    var method = notification.method;
+    if (method == "live_status") {
+      onLiveStatus(notification.params); 
+    }
+    else if (method == "recording_status") {
+      onRecordingStatus(notification.params); 
+    }
+    else if (method == "streaming_status") {
+      onStreamingStatus(notification.params); 
+    }
+    else {
+      // console.log("Ignore recorder status: " + method)
+    }  
+  }
+}
+
+// request to update status 
+function updateStatus() {
+  updateLiveStatus(); 
+  updateRecordingStatus(); 
+  updateStreamingStatus(); 
+}
+
+// request to update live recorder status 
+function updateLiveStatus() {
+  // console.log("update recorder status..."); 
+  recorder.live_status(null, 
+    function(id, result) {
+      onLiveStatus(result);
+    }, 
+    function(code, message) { 
+      console.log("Failed check recorder status: " + message);
+    }
+  );
+}
+
+// request to update recording status 
+function updateRecordingStatus() {
+  // console.log("update recording status..."); 
+  recorder.recording_status(null, 
+    function(id, result) {
+      onRecordingStatus(result);
+    }, 
+    function(code, message) { 
+      console.log("Failed check recording status: " + message);
+    }
+  );
+}
+
+// request to update recording status 
+function updateStreamingStatus() {
+  // console.log("update streaming status..."); 
+  recorder.streaming_status(null, 
+    function(id, result) {
+      onStreamingStatus(result);
+    }, 
+    function(code, message) { 
+      console.log("Failed check streaming status: " + message);
+    }
+  );
+}
+
+// on live status 
+// call by both status notification and check status 
+// Todo: will cause collision? 
+function onLiveStatus(status) {
+  // console.log("on live status..."); 
+}
+
+// on recording status 
+// call by both status notification and check status 
+// Todo: will cause collision? 
+function onRecordingStatus(status) {
+  // console.log("on recording status..."); 
+  // the status include multiple recorders 
+  // we find the first enabled recorder
+  if (status.length == 0) {
+    setRecordingStatus(false);
+    setRecordingPauseStatus(false); 
+  }
+  else {
+    for (const rec_status of status) {
+      if (rec_status.enabled) {
+        if (rec_status.state > 0) {
+          setRecordingStatus(true);
+          setRecordingInfo(rec_status.filename, rec_status.filesize, rec_status.duration); 
+          setRecordingPauseStatus(rec_status.state > 1); 
+        }
+        else {
+          setRecordingStatus(false);
+        }
+        break; 
+      }
+    }
+  }
+}
+
+// on stremaing status 
+// call by both status notification and check status 
+// Todo: will cause collision? 
+function onStreamingStatus(status) {
+  // console.log("on streaming status..."); 
+}
+
+function setRecordingStatus(started) {
+  if (started) {
+    var start_recording = document.getElementById("start-recording");
+    start_recording.innerText = "Stop"; 
+    start_recording.classList.add("active"); 
+    document.getElementById("pause-recording").disabled = false;
+  }
+  else {
+    var start_recording = document.getElementById("start-recording");
+    start_recording.innerText = "Start"; 
+    start_recording.classList.remove("active"); 
+    document.getElementById("pause-recording").disabled = true;
+    setRecordingPauseStatus(false);
+  }
+}
+
+function setRecordingPauseStatus(paused) {
+  if (paused) {
+    var pause_recording = document.getElementById("pause-recording");
+    pause_recording.innerText = "Resume";
+    pause_recording.classList.add("active"); 
+  }
+  else {
+    var pause_recording = document.getElementById("pause-recording");
+    pause_recording.innerText = "Pause";
+    pause_recording.classList.remove("active"); 
+  }
+}
+
+// update recording file info 
+function setRecordingInfo(filename, filesize, duration) {
+  // console.log("update recording info: " + filename + ", " + filesize + ", " + duration);
+  // var filename = filename.substring(status.filename.lastIndexOf('/') + 1);
+  // var filename = filename.replace(/^.*[\\\/]/, '')
+  // document.getElementById('filename').innerHTML = filename;
+  document.getElementById('filesize').innerHTML = filesize; 
+  document.getElementById('fileduration').innerHTML = new Date(duration * 1000).toISOString().substr(11, 8); 
+}
+
+// go live calib 
+function liveCalib() {
+  console.log("live claib...");
+  window.location = "calib.html";
+}
+
+// go field corners 
+function fieldOutline() {
+  console.log("field outline...");
+  window.location = "field.html"; 
+}
+
+// open image tuning 
+function liveTuning() {
+  console.log("live tuning...");
+  var tuningview = document.getElementById("tuning-popup");
+  if (window.getComputedStyle(tuningview, null).getPropertyValue('display') === 'none') {
+    console.log("show tuning");
+    document.getElementById("tuning-view").contentWindow.location.replace("tuning.html");
+    tuningview.style.display = "block";
+  }
+  else {
+    console.log("hide tuning");
+    tuningview.style.display = "none";
+    document.getElementById("tuning-view").contentWindow.location.replace("");
+  }
+}
+
+// open recordig settings 
+function recSettings() {
+  console.log("record settings...");
+  var tuningview = document.getElementById("tuning-popup");
+  if (window.getComputedStyle(tuningview, null).getPropertyValue('display') === 'none') {
+    console.log("show settings");
+    document.getElementById("tuning-view").contentWindow.location.replace("recset.html");
+    tuningview.style.display = "block";
+  }
+  else {
+    console.log("hide settings");
+    tuningview.style.display = "none";
+    document.getElementById("tuning-view").contentWindow.location.replace("");
+  }
+}
+
+// start|stop recording 
+function startRecording() {
+  var start_recording_btn = document.getElementById('start-recording');
+  if (start_recording_btn.classList.contains("active")) 
+    stop_recording()
+  else 
+    start_recording(); 
+}
+
+// start|stop recording 
+function pauseRecording() {
+  var pause_recording_btn = document.getElementById('pause-recording');
+  if (pause_recording_btn.classList.contains("active")) 
+    resume_recording()
+  else 
+    pause_recording(); 
+}
+
+// start recording 
+function start_recording() {
+  console.log("start recording..."); 
+  if (footage_id && footage_location) {
+    footage_info = {"footage_id": footage_id, "footage_location": footage_location}; 
+    start_footage_recording(JSON.parse(footage_info)); 
+  }
+  else {
+    footage.prepare_footage(null, 
+      function(id, result) {
+        console.log("Prepare footage result: " + result); 
+        start_footage_recording(result); 
+      }, 
+      function(code, message) { 
+        console.log("Prepare footage error: " + message); 
+      }
+    )
+  }
+}
+
+function start_footage_recording(footage_info) {
+  console.log("Start recording for footage: " + footage_info); 
+  recorder.start_recording(footage_info, 
+    function(id, result) {
+      console.log("Start recording result: " + result);
+      // updata recording status anyway 
+      updateRecordingStatus();
+    }, 
+    function(code, message) { 
+      console.log("Start recording error: " + message); 
+      // updata recording status anyway 
+      updateRecordingStatus();
+    }
+  ); 
+}
+
+
+// stop recording 
+function stop_recording() {
+  console.log("Stop recording");
+  recorder.stop_recording(null,
+    function(id, result) {
+      console.log("Stop recording result: " + result);
+      // updata recording status anyway 
+      updateRecordingStatus();
+    },
+    function(code, message) {
+      console.log("Stop recording error: " + message); 
+      // updata recording status anyway 
+      updateRecordingStatus();
+    }
+  ); 
+}
+
+// pause recording 
+function pause_recording() {
+  console.log("Pause recording");
+  recorder.pause_recording(null,
+    function(id, result) {
+      console.log("Pause recording result: " + result);
+      // updata recording status anyway 
+      updateRecordingStatus();
+    },
+    function(code, message) {
+      console.log("Pause recording error: " + message); 
+      // updata recording status anyway 
+      updateRecordingStatus();
+    }
+  ); 
+}
+
+// stop recording 
+function resume_recording() {
+  console.log("Resume recording");
+  recorder.resume_recording(null,
+    function(id, result) {
+      console.log("Resume recording result: " + result);
+      // updata recording status anyway 
+      updateRecordingStatus();
+    },
+    function(code, message) {
+      console.log("resume recording error: " + message); 
+      // updata recording status anyway 
+      updateRecordingStatus();
+    }
+  ); 
+}
+
+// go back to the default page 
+function goBack() {
+  window.location = "index.html";
+}
+
+// enable live video 
+// the server will determine if it needs real re-enable 
+// for target live video mode 
+function enable_live() {
+  console.log("enable live"); 
+  var mode = 0;
+  recorder.enable_live({"mode": mode}, 
+    function(id, result) {
+      console.log("Enable live result: " + result); 
+      // updata live status anyway 
+      updateLiveStatus();
+    }, 
+    function(code, message) { 
+      console.log("Enable live error: " + message); 
+      alert(message); 
+      // updata live status anyway 
+      updateLiveStatus();
+    }
+  ); 
+}
+
+// disable live video 
+function disable_live() {
+  console.log("Disable live");
+  recorder.disable_live(null,
+    function(id, result) {
+      console.log("Disable live result: " + result); 
+      // updata live status anyway 
+      updateLiveStatus();
+    },
+    function(code, message) {
+      console.log("Disable live error: " + message); 
+      // updata live status anyway 
+      updateLiveStatus();
+    }
+  ); 
+}
+
+function start_streaming() {
+  console.log("start streaming"); 
+  recorder.start_streaming(null, 
+    function(id, result) {
+      console.log("start streaming result: " + result); 
+      // enable preview 
+      document.getElementById("video-view").contentWindow.location.replace("videoview.html");
+    }, 
+    function(code, message) { 
+      console.log("start streaming error: " + message); 
+      alert(message); 
+      // disenable preview 
+      document.getElementById("video-view").contentWindow.location.replace("");
+    }
+  ); 
+}
+
+function stop_streaming() {
+  console.log("stop streaming");
+  recorder.stop_streaming(null,
+    function(id, result) {
+      console.log("stop streaming result: " + result); 
+      // disenable preview 
+      document.getElementById("video-view").contentWindow.location.replace("");
+    },
+    function(code, message) {
+      console.log("stop streaming error: " + message); 
+      // disenable preview 
+      document.getElementById("video-view").contentWindow.location.replace("");
+    }
+  ); 
+}
+
+window.onbeforeunload = function() {
+  stop_streaming();
+}
+
+window.onload = function() {
+  // hookup mouse action to hide tuning view 
+  document.addEventListener('mouseup', function(e) {
+    var tuning = document.getElementById('live-tuning');
+    var tuning = document.getElementById('live-tuning');
+    var tuningview = document.getElementById('tuning-popup');
+    if (!tuningview.contains(e.target) && !tuning.contains(e.target)) {
+      tuningview.style.display = 'none';
+    }
+  });
+  // connection to camera 
+  connect();
+}
+</script>
+<style type="text/css">
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0; 
+  padding: 10;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 16px; 
+  color: #444; 
+  text-align: center;
+}
+
+#main {
+  position: absolute;
+  top: 0;
+  bottom: 50px;
+  left: 0; 
+  right: 0; 
+  overflow: hidden;
+}
+
+#info {
+  height: 30px; 
+  position: absolute;  
+  bottom: 55px;  
+  left: 0; 
+  right: 0;
+  overflow: hidden; 
+  text-align: center;
+}
+
+.record-info-panel {
+  height: 25px; 
+  position: absolute;
+  top: 0; 
+  left: 0;
+  right: 0;
+  margin: auto;
+  overflow: hidden;
+}
+
+.record-info-panel label {
+  height: 25px; 
+  line-height: 25px;
+  margin: 0; 
+  padding: 3px 5px; 
+  font-size: 95%;
+  position: relative;
+  overflow: hidden;
+  background-color: #172974;
+  color: #eee;
+}
+
+.record-info-panel label span {
+  margin: 0 2px; 
+}
+
+#tuning-popup {
+  position: absolute;
+  display: none; 
+  top: 0;
+  bottom: 50px; 
+  right: 0; 
+  width: 200px;
+  background-color: #eee;
+}
+
+#control-bar {
+  position: absolute;  
+  height: 50px; 
+  bottom: 0;  
+  left: 0; 
+  right: 0;
+  overflow: hidden; 
+  text-align: center;
+  border-top: 1px solid #ccc;
+}
+
+.control-panel {
+  height: 35px; 
+  position: absolute;  
+  overflow: hidden; 
+}
+
+.align-left {
+  top: 5px;
+  left: 10px; 
+}
+
+.align-right {
+  top: 5px;
+  right: 10px;
+}
+
+button {
+  display: inline-block;
+  height: 35px; 
+  margin: 0 2px;
+  padding: 0 10px; 
+  border: none;
+  font-size: 100%; 
+  color: #444; 
+  background-color: #f1f1f1;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+button:hover {
+  background-color: #ddd;
+}
+
+button:disabled {
+  color: #999;
+  background-color: #f1f1f1;
+  cursor: auto;
+}
+
+#backbtn {
+  width: 35px;
+  border-radius: 10px;
+  background-color: #aaa;
+  background-image: url("images/arrow-right.png");
+  background-repeat: no-repeat;
+  background-position: center center;  
+  background-size: 35px;
+  overflow: hidden;
+}
+
+@media only screen and (max-width: 600px) {
+
+#main {
+  bottom: 100px;
+}
+
+#info {
+  bottom: 100px;  
+}
+
+#control-bar {
+  height: 100px; 
+}
+
+.control-panel {
+  height: 35px; 
+  position: absolute;  
+  overflow: hidden; 
+}
+
+.align-left {
+  top: 50px; 
+  left: 10px; 
+  right: 10px;
+  margin: auto;
+}
+
+.align-right {
+  top: 5px;
+  left: 10px; 
+  right: 10px;
+  margin: auto;
+}
+
+#tuning-popup {
+  display: none; 
+  top: auto;
+  bottom: 55px;
+  left: 0;
+  right: 0; 
+  margin: auto; 
+  width: auto; 
+  height: 180px;
+}
+
+}
+</style>
+</head>
+<body> 
+  <div id="main">
+    <iframe id="video-view" src="" width="100%" height="100%" scrolling="no" frameborder="0"></iframe>
+  </div>
+  <div id="info">
+    <div class="record-info-panel">
+      <label><span id="fileduration">00:00:00</span> | <span id="filesize">0</span>KB</label>
+    </div>
+  </div> 
+  <div id="control-bar">
+    <div class="control-panel align-left">
+      <button id="live-calib" onclick="liveCalib()">Calibrate</button>
+      <!-- <button id="field-outline" onclick="">Field</button> -->
+      <button id="live-tuning" onclick="liveTuning()">Tuning</button>
+      <button id="rec-settings" onclick="recSettings()">Settings</button>
+    </div>
+    <div class="control-panel align-right">
+      <button id="start-recording" onclick="startRecording()">Start</button>
+      <button id="pause-recording" onclick="pauseRecording()">Pause</button>
+      <button id="backbtn" onclick="goBack()">&nbsp;</button>
+    </div>
+  </div>
+  <div id="tuning-popup">
+    <iframe id="tuning-view" src="" width="100%" height="100%" scrolling="auto" frameborder="0"></iframe>
+  </div>
+</body>
+</html>

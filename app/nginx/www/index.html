@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta http-equiv="X-UA-Compatible" content="IE=edge"> 
+<meta name="format-detection" content="telephone=no,email=no,adress=no">
+<title>Reeplayer Camera</title>
+<script src="js/eventemitter2.min.js"></script>
+<script src="js/roslib.min.js"></script>
+<script src="js/cameraclient.js"></script>
+<link rel="prefetch" href="images/disconnected.png">
+<script>
+// http://192.168.1.225:8085/camera/index.html
+var hostname = window.location.hostname;
+if (!hostname) hostname = "127.0.0.1";  
+
+// connection to camera service 
+// Todo: may share the single connection from parent page 
+var connection = new CameraConnection(
+  function(error) { // error
+    console.log(error);
+    onConnected(false); 
+  }, 
+  function() { // connected
+    console.log('Connected!');
+    onConnected(true); 
+  }, 
+  function() { // close 
+    console.log('Connection closed');
+    onConnected(false);
+  }
+);
+
+// RPC clients  
+var camera = new Camera(connection); 
+var footage = new Footage(connection);
+var uploader = new Uploader(connection);
+var recorder = new Recorder(connection); 
+
+// connect to camera 
+function connect() {
+  console.log("Connecting to: " + hostname); 
+  var link_status = document.getElementById("link-status");
+  link_status.innerText = "CONNECTING";
+  link_status.style.color = "#00f";
+  connection.connect(hostname);
+}
+
+// on connection status 
+function onConnected(connected) {
+  console.log("connected: " + connected); 
+  if (connected) {
+    var link_status = document.getElementById("link-status");
+    link_status.innerText = "CONNECTED";
+    link_status.style.color = "#0f0";
+    // refresh all status 
+    updateAllStatus();
+    // subscribe status notification
+    camera.subscribe(function(status_message) {
+      onCameraMessage(status_message); 
+    });
+    footage.subscribe(function(status_message) {
+      onFootageMessage(status_message); 
+    });
+    uploader.subscribe(function(status_message) {
+      onUploaderMessage(status_message); 
+    });
+    recorder.subscribe(function(status_message) {
+      onRecorderMessage(status_message); 
+    });
+  }
+  else {
+    var link_status = document.getElementById("link-status");
+    link_status.innerText = "DISCONNECTED";
+    link_status.style.color = "#f00";
+    setTimeout(function() {
+      connect(); 
+    }, 5000); 
+  }
+}
+
+// on camera status notification 
+function onCameraMessage(status_message) {
+  // console.log(status_message)
+  for (const notification of status_message) {
+    var method = notification.method;
+    if (method == "system_status") {
+      onSystemStatus(notification.params); 
+    }
+    else {
+      // console.log("Ignore camera status: " + method)
+    }  
+  }
+}
+
+// on footage status notification 
+function onFootageMessage(status_message) {
+  // console.log("on footage message..."); 
+  // console.log(status_message)
+  for (const notification of status_message) {
+    var method = notification.method;
+    if (method == "footage_status") {
+      onFootageStatus(notification.params); 
+    }
+    else {
+      // console.log("Ignore footage status: " + method)
+    }  
+  }
+}
+
+// on uploader status notification 
+function onUploaderMessage(status_message) {
+  // console.log("on uploader message..."); 
+  // console.log(status_message)
+  for (const notification of status_message) {
+    var method = notification.method;
+    if (method == "uploading_status") {
+      onUploadingStatus(notification.params); 
+    }
+    else {
+      // console.log("Ignore uploader status: " + method)
+    }  
+  }
+}
+
+// on recorder status notification 
+function onRecorderMessage(status_message) {
+  // console.log("on recorder message..."); 
+  // console.log(status_message)
+  for (const notification of status_message) {
+    var method = notification.method;
+    if (method == "recording_status") {
+      onRecordingStatus(notification.params); 
+    }
+    else {
+      // console.log("Ignore recorder status: " + method)
+    }  
+  }
+}
+
+// request to update all status 
+function updateAllStatus() { 
+  updateSystemStatus();
+  updateFootageStatus(); 
+  updateUploadingStatus(); 
+  updateRecordingStatus(); 
+}
+
+// request to update system status 
+function updateSystemStatus() {
+  console.log("update system status..."); 
+  camera.system_status(null, 
+    function(id, result) {
+      console.log("check system status result");
+      onSystemStatus(result);
+    },
+    function(code, message) {
+      console.log("Failed check system status"); 
+    } 
+  );
+}
+
+// request to update footage status 
+function updateFootageStatus() {
+  console.log("update footage status..."); 
+  footage.footage_status(null, 
+    function(id, result) {
+      console.log("check footage status result");
+      onFootageStatus(result);
+    }, 
+    function(code, message) { 
+      console.log("Failed check footage status: " + message);
+    }
+  );
+}
+
+// request to update uploading status 
+function updateUploadingStatus() {
+  console.log("update uploading status..."); 
+  uploader.uploading_status(null, 
+    function(id, result) {
+      console.log("check uploading status result");
+      onUploadingStatus(result);
+    }, 
+    function(code, message) { 
+      console.log("Failed check uploading status: " + message);
+    }
+  );
+}
+
+// request to update recording status 
+function updateRecordingStatus() {
+  console.log("update recording status..."); 
+  recorder.recording_status(null, 
+    function(id, result) {
+      console.log("check recording status result");
+      onRecordingStatus(result);
+    }, 
+    function(code, message) { 
+      console.log("Failed check recording status: " + message);
+    }
+  );
+}
+
+// on storage status 
+function onSystemStatus(status) {
+  // console.log("system status:");
+  // console.log(status); 
+  document.getElementById("storage-free").innerText = status.storage.free + " MB"; 
+  document.getElementById("battery-info").innerText = status.battery.percent + "%"; 
+  
+  if (status.battery.ave_time_to_empty < 65535) {
+    document.getElementById("battery-info").innerText += " | " + status.battery.ave_time_to_empty + "m"; 
+  }
+
+  if (status.battery.time_to_full < 1000) {
+    document.getElementById("battery-info").innerText += (" | Charging " + status.battery.time_to_full + "m");  
+  }
+  document.getElementById("temp-info").innerText = Math.max.apply(null, Object.values(status.hardware.TEMP)) + "C"; 
+}
+
+// on footage status 
+// call by both status notification and check status 
+// Todo: will cause collision? 
+function onFootageStatus(status) {
+  // console.log("on footage status...");
+  // console.log(status); 
+  // we will not delete/create the footage list completely, 
+  // instead, correct current list
+  var footage_ids = Object.keys(status); 
+  footage_ids.sort((a, b) => (status[a].footage_timestamp < status[b].footage_timestamp) ? 1 : -1); 
+  // console.log("footage id in order: " + JSON.stringify(footage_ids)); 
+  var footage_list = document.getElementById("footage-list"); 
+  var last_index = -1; 
+  var next_index = 0;
+  var del_footage_items = [];
+  var child_items = footage_list.getElementsByClassName("footage-item");
+  // console.log("all child items: " + child_items.length);
+  for (var i = 0; i < child_items.length; i++) {
+    var footage_item = child_items[i]; 
+    var footage_id = footage_item.id; 
+    // console.log("footage id of current item: " + footage_id);
+    while (next_index < footage_ids.length) {
+      if (footage_ids[next_index] == footage_id) {
+        break;
+      }
+      else {
+        next_index++;
+      }
+    }
+    // console.log("next index: " + next_index);
+    // console.log("footage  count: " + footage_ids.length); 
+    if (next_index == footage_ids.length) {
+      del_footage_items.push(footage_item); 
+      next_index = last_index+1;
+    }
+    else {
+      // update item of next_index with new data 
+      // console.log("update footage: " + next_index);
+      updateFootageItem(footage_item, status[footage_ids[next_index]]); 
+      // insert new items if exists 
+      var current_item = footage_item;
+      for (var j = next_index - 1; j > last_index; j--) {
+        // console.log("add new footage: " + footage_ids[j]);
+        var new_footage_item = createFootageItem(status[footage_ids[j]]);
+        footage_list.insertBefore(new_footage_item, current_item);
+        current_item = new_footage_item;
+      }
+      last_index = next_index;
+      next_index++;
+    }
+  }
+  while (next_index < footage_ids.length) {
+    console.log("add new footage: " + next_index); 
+    var footage_item = createFootageItem(status[footage_ids[next_index]]); 
+    footage_list.appendChild(footage_item); 
+    next_index++;
+  }
+  for (const del_item of del_footage_items) {
+    console.log("remove footage...");
+    footage_list.removeChild(del_item); 
+  }
+}
+
+// create a new item in the footage list 
+function createFootageItem(footage) {
+  // console.log("create footage: " + JSON.stringify(footage));
+  var footage_item = document.createElement("div"); 
+  footage_item.className = "footage-item";
+  footage_item.id = footage.footage_id; 
+
+  footage_info = document.createElement("div");
+  footage_info.className = "footage-info";
+  footage_name = document.createElement("h3");
+  footage_name.className = "footage-name";
+  footage_name.innerText = footage.footage_name; 
+  footage_info.appendChild(footage_name);
+  footage_data = document.createElement("p"); 
+  footage_data.className = "footage-data"; 
+  span = document.createElement("span");
+  span.className = "footage-timestamp"; 
+  span.innerText = new Date(parseInt(footage.footage_timestamp) * 1000).toLocaleString("en-GB");
+  footage_data.appendChild(span);
+  span = document.createElement("span");
+  span.className = "separator";
+  span.innerHTML = "&#8226;";
+  footage_data.appendChild(span);
+  span = document.createElement("span");
+  span.className = "footage-size"; 
+  span.innerText = footage.footage_size_kb + " KB"; 
+  footage_data.appendChild(span);
+  span = document.createElement("span");
+  span.className = "separator";
+  span.innerHTML = "&#8226;";
+  footage_data.appendChild(span);
+  span = document.createElement("span");
+  span.className = "footage-uploading-progress"; 
+  span.innerText = "0%"; 
+  footage_data.appendChild(span);
+  span = document.createElement("span");
+  span.className = "separator";
+  span.innerHTML = "&#8657;";
+  footage_data.appendChild(span);
+  footage_info.appendChild(footage_data); 
+  footage_item.appendChild(footage_info);
+
+  footage_more = document.createElement("div");
+  footage_more.className = "footage-more"; 
+  footage_more_img = document.createElement("img"); 
+  footage_more_img.src = "images/more-action.png";
+  footage_more_img.onclick = "footageMoreAction(${footage.footage_id})"; 
+  footage_more.appendChild(footage_more_img);
+  footage_item.appendChild(footage_more);
+
+  footage_clear = document.createElement("div");
+  footage_clear.style.cssText = "clear:both";
+  footage_item.appendChild(footage_clear);
+  return footage_item; 
+}
+
+// update the footage info 
+function updateFootageItem(item, footage) {
+  // console.log(footage);
+  if (item.id != footage.footage_id) {
+    console.log("mismatch footage id");
+    return;
+  }
+  // console.log("child of footage item: " + item.childNodes.length);
+  for (var i = 0; i < item.childNodes.length; i++) {
+    var info_item = item.childNodes[i]; 
+    if (info_item.className == "footage-info") {
+      for (var j = 0; j < info_item.childNodes.length; j++) {
+        var infoitem = info_item.childNodes[j]; 
+        if (infoitem.className == "footage-name") {
+          // console.log("update footage name: " + footage.footage_name);
+          infoitem.innerText = footage.footage_name; 
+        }
+        else if (infoitem.className == "footage-data") {
+          for (var k = 0; k < infoitem.childNodes.length; k++) {
+            var spanitem = infoitem.childNodes[k];
+            if (spanitem.className == "footage-timestamp") {
+              // console.log("update footage timestamp: " + footage.footage_timestamp);
+              spanitem.innerText = new Date(parseInt(footage.footage_timestamp) * 1000).toLocaleString("en-GB");
+            }
+            else if(spanitem.className == "footage-size") {
+              // console.log("update footage size: " + footage.footage_size_kb);
+              spanitem.innerText = footage.footage_size_kb + " KB"; 
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// on uploading status 
+function onUploadingStatus(status) {
+  console.log("on uploading status...")
+  // the status is for footages 
+  for (const footage_id in status) {
+    console.log("uploading status for " + footage_id + ": " + status[footage_id]); 
+    updateFootageUploading(footage_id, status[footage_id]);
+  }
+}
+
+// update the footage uploading status  
+function updateFootageUploading(footage_id, uploading_status) {
+  item = document.getElementById(footage_id) 
+  if (item) {
+    // console.log("child of footage item: " + item.childNodes.length);
+    for (var i = 0; i < item.childNodes.length; i++) {
+      var info_item = item.childNodes[i]; 
+      if (info_item.className == "footage-info") {
+        for (var j = 0; j < info_item.childNodes.length; j++) {
+          var infoitem = info_item.childNodes[j]; 
+          if (infoitem.className == "footage-data") {
+            for (var k = 0; k < infoitem.childNodes.length; k++) {
+              var spanitem = infoitem.childNodes[k];
+              if (spanitem.className == "footage-uploading-progress") {
+                // console.log("update footage progress: " + footage.footage_uploading_progress);
+                spanitem.innerText = uploading_status.progress + "%"; 
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// on recording status 
+// call by both status notification and check status 
+// Todo: will cause collision? 
+function onRecordingStatus(status) {
+  // console.log("on recording status..."); 
+  // the status include multiple recorders 
+  // we find the first enabled recorder
+  for (const rec_status of status) {
+    if (rec_status.enabled) {
+      if (rec_status.state > 0) {
+        // setRecordingFootage(rec_status.footage_id); 
+        setRecordingState(true);
+        // setRecordingInfo(rec_status.filename, rec_status.filesize, rec_status.duration)
+        setRecordingPauseState(rec_status.state > 1); 
+      }
+      else {
+        setRecordingState(false);
+      }
+      break; 
+    }
+  }
+}
+
+function setRecordingState(started) {
+  if (started) {
+    document.getElementById("pause-recording").disabled = false; 
+    document.getElementById("start-recording-control").style.display = "none";  
+    document.getElementById("stop-recording-control").style.display = "flex"; 
+  }
+  else {
+    setRecordingPauseState(false);
+    document.getElementById("pause-recording").disabled = true; 
+    document.getElementById("stop-recording-control").style.display = "none"; 
+    document.getElementById("start-recording-control").style.display = "inline";  
+  }
+}
+
+function setRecordingPauseState(paused) {
+  // console.log("set pause status: " + paused); 
+  if (paused) {
+    document.getElementById("pause-recording").classList.add("active");
+  }
+  else {
+    document.getElementById("pause-recording").classList.remove("active");
+  }
+}
+
+function stopRecording() {
+  console.log("stop recording..."); 
+  stop_recording(); 
+}
+
+function startRecording() {
+  console.log("start recording..."); 
+  window.location = "live.html"; 
+}
+
+function pauseRecording() {
+  var pauseRecordingBtn = document.getElementById("pause-recording");
+  if (pauseRecordingBtn.classList.contains("active")) {
+    console.log("resume recording..."); 
+    resume_recording(); 
+  }
+  else {
+    console.log("pause recording..."); 
+    pause_recording();
+  }
+}
+
+// stop recording 
+function stop_recording() {
+  console.log("Stop recording");
+  recorder.stop_recording(null,
+    function(id, result) {
+      console.log("Stop recording result: " + result);
+      // updata recording status anyway 
+      updateRecordingStatus();
+    },
+    function(code, message) {
+      console.log("Stop recording error: " + message); 
+      // updata recording status anyway 
+      updateRecordingStatus();
+    }
+  ); 
+}
+
+// pause recording 
+function pause_recording() {
+  console.log("Pause recording");
+  recorder.pause_recording(null,
+    function(id, result) {
+      console.log("Pause recording result: " + result);
+      // updata recording status anyway 
+      updateRecordingStatus();
+    },
+    function(code, message) {
+      console.log("Pause recording error: " + message); 
+      // updata recording status anyway 
+      updateRecordingStatus();
+    }
+  ); 
+}
+
+// stop recording 
+function resume_recording() {
+  console.log("Resume recording");
+  recorder.resume_recording(null,
+    function(id, result) {
+      console.log("Resume recording result: " + result);
+      // updata recording status anyway 
+      updateRecordingStatus();
+    },
+    function(code, message) {
+      console.log("resume recording error: " + message); 
+      // updata recording status anyway 
+      updateRecordingStatus();
+    }
+  ); 
+}
+
+function markRecording() {
+  window.location = "live.html"; 
+}
+
+// function setRecordingFootage(footage_id) {
+//   console.log("set recording footage: " + footage_id);
+// }
+
+// on click of restart button 
+function restartSystem() {
+  console.log("restart system..."); 
+  camera.restart_system(
+    function(id, result) {
+      console.log("Restart system result: " + result);
+    }, 
+    function(code, message) {
+      console.log("Error restart system: " + message); 
+    }
+  );
+}
+
+// on click of shutdown button 
+function shutdownSystem() {
+  console.log("shutdown system..."); 
+  camera.shutdown_system(
+    function(id, result) {
+      console.log("Shutdown system result: " + result);
+    }, 
+    function(code, message) {
+      console.log("Error shutdown system: " + message); 
+    }
+  );
+}
+
+function showMenu() {
+  var menuview = document.getElementById("menu-view");
+  if (window.getComputedStyle(menuview, null).getPropertyValue('display') === 'none') {
+    console.log("show menu");
+    menuview.style.display = "block";
+  }
+  else {
+    console.log("hide menu");
+    menuview.style.display = "none";
+  }
+}
+
+window.onload = function() {
+  // hook on mouse action to hide menu view 
+  document.addEventListener('mouseup', function(e) {
+    var menu = document.getElementById('menu');
+    var menuview = document.getElementById('menu-view');
+    if (!menuview.contains(e.target) && !menu.contains(e.target)) {
+      menuview.style.display = 'none';
+    }
+  });
+  // connection to camera  
+  connect();
+}
+</script>
+<style type="text/css">
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0; 
+  padding: 10px;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 16px; 
+  color: #444; 
+  text-align: center;
+}
+
+#main {
+  width: 100%;
+  text-align: left;
+}
+
+#header {
+  height: 60px; 
+  overflow: hidden;
+}
+
+#header #back {
+  float: left;
+  margin-right: 20px;
+}
+
+#header #title {
+  float: left; 
+  margin-right: 20px; 
+}
+
+#title h1 {
+  margin: 0;
+  padding: 0;
+  font-size: 26px;
+}
+
+#title p {
+  margin: 0; 
+  padding: 0; 
+  font-size: 14px;
+  color: red; 
+}
+
+#header #menu {
+  float: right; 
+  margin-left: 20px;
+}
+
+#header img {
+  height: 45px;
+  border: none; 
+}
+
+.section {
+  margin-top: 20px; 
+  margin-bottom: 10px;
+}
+
+.section h2 {
+  margin: 0;
+  margin-bottom: 20px;
+  padding: 0;
+  font-size: 18px;
+  font-weight: normal;
+}
+
+.section .item div span.left {
+  float: left; 
+}
+
+.section .item div span.right {
+  float: right; 
+}
+
+#camera-status .item {
+  display: inline-block;
+  width: 100%;
+  background-repeat: no-repeat;
+  background-position: left 0 center;
+  background-size: 20px;
+  padding-left: 45px; 
+  margin-bottom: 20px; 
+}
+
+#camera-status #storage-status {
+  background-image: url("images/storage-icon.png");
+}
+
+#camera-status #battery-status {
+  background-image: url("images/battery-icon.png");
+}
+
+#camera-status #temp-status {
+  background-image: url("images/temp-icon.png");
+}
+
+#camera-status .item div {
+  display: block;
+  margin: 0; 
+  padding: 0; 
+  border-bottom: 1px solid #ddd; 
+}
+
+#camera-info .item {
+  display: inline-block;
+  width: 100%; 
+  margin-bottom: 20px;
+}
+
+#camera-info .item div {
+  display: block;
+  margin: 0; 
+  padding: 0; 
+  border-bottom: 1px solid #ddd; 
+}
+
+#footage-list .footage-item {
+  display: inline-block;
+  width: 100%;
+  margin: 10px 0;
+  border-bottom: 1px solid #ddd; 
+  overflow: hidden;
+}
+
+#footage-list .footage-item div {
+  display: block;
+}
+
+#footage-list .footage-item .footage-info {
+  float: left; 
+}
+
+#footage-list .footage-item .footage-info .footage-name {
+  margin: 0;
+  padding: 0; 
+  font-size: 16px; 
+}
+
+#footage-list .footage-item .footage-info .footage-data {
+  margin: 20px 0; 
+  padding: 0; 
+  font-size: 14px;
+}
+
+#footage-list .footage-item .footage-info .separator {
+  margin: 0 5px;
+}
+
+#footage-list .footage-item .footage-more {
+  float: right; 
+  width: 40px;
+}
+
+#footage-list .footage-item .footage-more img {
+  width: 100%;
+  border: none;
+}
+
+#menu-view {
+  position: absolute;
+  display: none; 
+  top: 55px;
+  bottom: auto;
+  right: 10px; 
+  left: auto;
+  width: 150px; 
+  height: auto; 
+  background-color: #eee;
+  padding: 15px;
+}
+
+#menu-view ul {
+  list-style-type: none;
+  margin: 0;
+  padding: 0;
+}
+
+#menu-view ul li {
+  font-size: 20px;
+  margin-bottom: 5px;
+}
+
+#start-recording-control {
+  display: inline;
+}
+
+#start-recording {
+  background-color: blue;
+  display: inline-block;
+  height: 40px; 
+  width: 100%;
+  margin: 0;
+  padding: 0 20px; 
+  border: none;
+  border-radius: 12px;
+  line-height: 40px;
+  font-size: 16px;
+  color: white;
+  font-weight: bold; 
+  cursor: pointer;
+  text-decoration: none;
+  text-align: center;
+  overflow: hidden;
+  background-image: url("images/arrow-right.png");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 25px;
+  padding-right: 45px; 
+}
+
+#start-recording:hover {
+  background-color: #33F;
+}
+
+#stop-recording-control{
+  vertical-align: middle;
+  display: none;
+  justify-content: space-around;
+}
+
+.icon-button {
+  margin: auto;
+  padding: 0; 
+  border: none; 
+  cursor: pointer;
+  overflow: hidden;
+  border-radius: 50%;
+  background-repeat: no-repeat;
+  background-position: center center;  
+  vertical-align: middle;
+}
+
+#pause-recording {
+  width: 60px; 
+  height: 60px; 
+  background-image: url("images/pause-button.png");
+  background-size: 60px;
+}
+
+#pause-recording.active {
+  background-image: url("images/resume-button.png");
+}
+
+#stop-recording {
+  width: 80px; 
+  height: 80px;
+  background-image: url("images/stop-button.png");
+  background-size: 80px;
+}
+
+#mark-recording {
+  width: 60px;
+  height: 60px;
+  background-image: url("images/bookmark-button.png");
+  background-size: 60px;
+}
+
+@media only screen and (max-width: 600px) {
+
+#menu-view { 
+  top: auto;
+  bottom: 0;
+  left: 0;
+  right: 0; 
+  width: auto;
+  height: auto; 
+  background-color: #eee;
+  padding: 15px;
+}
+
+}
+
+</style>
+</head>
+<body>
+  <div id="main">
+    <div id="header">
+      <div id="title">
+        <h1 id="camera-name">CAMERA-0</h1>
+        <p id="link-status">DISCONNECTED</p>
+      </div>
+      <div id="menu">
+        <img src="images/more.png" onclick="showMenu()" />
+      </div>
+      <div style="clear:both"></div>
+    </div>
+    <div class="section">
+      <!-- <h2>Status</h2> -->
+      <div class="section-view" id="camera-status">
+        <div class="item" id="storage-status">
+          <div>
+            <span class="left">Storage</span>
+            <span class="right" id="storage-free">0 KB</span>
+            <div style="clear:both"></div>
+          </div>
+        </div>
+        <div class="item" id="battery-status">
+          <div>
+            <span class="left">Battery</span>
+            <span class="right" id="battery-info">0%</span>
+            <div style="clear:both"></div>
+          </div>
+        </div>
+        <div class="item" id="temp-status">
+          <div>
+            <span class="left">Temperature</span>
+            <span class="right" id="temp-info">0C</span>
+            <div style="clear:both"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div clss="section">
+      <div id="start-recording-control">
+        <button class="icon-button" id="start-recording" onclick="startRecording()">Start recording</button>
+      </div>
+      <div id="stop-recording-control">
+        <button class="icon-button active" id="pause-recording" onclick="pauseRecording()"></button>
+        <button class="icon-button" id="stop-recording" onclick="stopRecording()"></button>
+        <button class="icon-button" id="mark-recording" onclick="markRecording()"></button>
+      </div>
+    </div>
+    <div class="section">
+      <!-- <h2>Stored on camera</h2> -->
+      <div class="section-view" id="footage-list">
+      </div>
+    </div>
+    <!-- <div class="section">
+      <h2>Camera info</h2>
+      <div class="section-view" id="camera-info">
+        <div class="item" id="name-info">
+          <div>
+            <span class="left">Name</span>
+            <span class="right" id="camera-name-info">Camera 0</span>
+            <div style="clear:both"></div>
+          </div>
+        </div>
+        <div class="item" id="serial-info">
+          <div>
+            <span class="left">Serial</span>
+            <span class="right" id="camera-serial-serial">000-00-00000</span>
+            <div style="clear:both"></div>
+          </div>
+        </div>
+      </div>
+    </div> -->
+  </div>
+  <div id="menu-view">
+    <ul>
+      <li><a href="update.html">Update</a></li>
+      <!-- <li><a href="network.html">Network</a></li> -->
+      <!-- <li><a href="live.html">Live Video</a></li> -->
+      <!-- <li><a href="calibration.html">Offline Calib</a></li> -->
+      <!-- <li><a href="javascript:restartSystem()">Restart</a></li> -->
+      <li><a href="javascript:shutdownSystem()">Shutdown</a></li>
+      <li><a href="speedtest.html">Speed Test</a></li>
+    </ul>
+  </div>
+</body>
+</html>

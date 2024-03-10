@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta http-equiv="X-UA-Compatible" content="IE=edge"> 
+<meta name="format-detection" content="telephone=no,email=no,adress=no">
+<title>Reeplayer Camera System</title>
+<link rel="stylesheet" href="style.css">
+<script src="js/eventemitter2.min.js"></script>
+<script src="js/roslib.min.js"></script>
+<script src="js/cameraclient.js"></script>
+<script>
+// http://192.168.1.225:8085/camera/index.html
+var hostname = window.location.hostname;
+if (!hostname) hostname = "127.0.0.1";  
+
+// all pages for menu buttons
+var page_buttons = {
+  "recording.html" : "recordbtn",
+  "uploading.html" : "uploadbtn",
+  "calibration.html" : "calibbtn",
+  "speedtest.html" : "speedbtn",
+  "system.html" : "systembtn",
+}
+
+// default page to show  
+var default_page = "recording.html";
+
+// show page
+function showPage(page_url) {
+  console.log("page url: " + page_url);
+  var page_view = document.getElementById("view"); 
+  page_view.src = page_url;
+  // update highlight button 
+  var pos = page_url.indexOf('?'); 
+  var page_name = pos < 0 ? page_url : page_url.substr(0, pos); 
+  console.log("page file: " + page_name);
+  var button_id = page_buttons[page_name]; 
+  var container = document.getElementById("header");
+  var buttons = container.getElementsByClassName("btn");
+  for (var i = 0; i < buttons.length; i++) {
+    var button = buttons[i]; 
+    button.className = button.className.replace(" active", "");
+    if (button.id == button_id) {
+      button.className += " active";
+    }
+  }
+}
+
+// connection to camera service 
+// Todo: may share the single connection to all sub pages
+var connection = new CameraConnection(
+  function(error) { // error
+    console.log(error);
+    onConnected(false); 
+  }, 
+  function() { // connected
+    console.log('Connected!');
+    onConnected(true); 
+  }, 
+  function() { // close 
+    console.log('Connection closed');
+    onConnected(false);
+  }
+);
+
+// RPC clients  
+var camera = new Camera(connection); 
+var uploader = new Uploader(connection); 
+var recorder = new Recorder(connection);
+var calibrator = new Calibrator(connection); 
+
+// connect to camera 
+function connect() {
+  var connection_label = document.getElementById('connlabel')
+  connection_label.style["background-image"] = "url(images/connecting.png)";
+  connection_label.innerHTML = "Connecting";
+  console.log("Connecting to: " + hostname); 
+  connection.connect(hostname);
+}
+
+// on connection status 
+function onConnected(connected) {
+  console.log("connected: " + connected); 
+  var connection_label = document.getElementById('connlabel')
+  if (connected) {
+    connection_label.style["background-image"] = "url(images/connected.png)";
+    connection_label.innerHTML = "Connected";
+    // do all status update here 
+    updateStatus();
+    camera.subscribe(function(status_message) {
+      onCameraMessage(status_message); 
+    });
+    recorder.subscribe(function(status_message) {
+      onRecorderMessage(status_message); 
+    });
+    uploader.subscribe(function(status_message) {
+      onUploaderMessage(status_message); 
+    });
+    calibrator.subscribe(function(status_message) {
+      onCalibratorMessage(status_message); 
+    });
+  }
+  else {
+    connection_label.style["background-image"] = "url(images/disconnected.png)";
+    connection_label.innerHTML = "Disconnected";
+  }
+}
+
+// on camera status notification 
+function onCameraMessage(status_message) {
+  for (const notification of status_message) {
+    var method = notification.method;
+    if (method == "system_status") {
+      onSystemStatus(notification.params); 
+    }
+    else if (method == "network_status") {
+      onNetworkStatus(notification.params); 
+    }
+    else {
+      // console.log("Ignore camera status with method: " + method)
+    } 
+  }
+}
+
+// on recorder status notification 
+function onRecorderMessage(status_message) {
+  for (const notification of status_message) {
+    var method = notification.method;
+    if (method == "live_status") {
+      onLiveStatus(notification.params);
+    } 
+    else {
+      // console.log("Ignore recorder status with method: " + method)
+    } 
+  }
+}
+
+// on uploader status notification 
+function onUploaderMessage(status_message) {
+  for (const notification of status_message) {
+    var method = notification.method;
+    if (method == "uploading_status") {
+      onUploadingStatus(notification.params)
+    }
+    else {
+      // console.log("Ignore uploader status with method: " + method)
+    } 
+  }
+}
+
+// on calibrator status notification 
+function onCalibratorMessage(status_message) {
+  for (const notification of status_message) {
+    var method = notification.method;
+    if (method == "calibration_status") {
+      onCalibrationStatus(notification.params)
+    }
+    else {
+      console.log("Ignore calibrator status with method: " + method)
+    } 
+  }
+}
+
+// request to update status 
+function updateStatus() {
+  updateSystemStatus();
+  updateNetworkStatus(); 
+  updateLiveStatus(); 
+  updateUploadingStatus();
+  updateCalibrationStatus();
+}
+
+// request to update system status 
+function updateSystemStatus() {
+  camera.system_status(null, 
+    function(id, result) {
+      onSystemStatus(result);
+    },
+    function(code, message) {
+      console.log("Failed check system status: " + code + ": " + message);
+    } 
+  );
+}
+
+// request to update network status 
+function updateNetworkStatus() {
+  camera.network_status(null, 
+    function(id, result) {
+      onNetworkStatus(result);
+    },
+    function(code, message) {
+      console.log("Failed check network status: " + code + ": " + message);
+    } 
+  );
+}
+
+// request to update live video status
+function updateLiveStatus() {
+  recorder.live_status(
+    function(id, result) {
+      onLiveStatus(result);
+    },
+    function(code, message) {
+      console.log("Failed check live status: " + code + ": " + message); 
+    } 
+  );
+}
+
+// request to update uploading status 
+function updateUploadingStatus() {
+  uploader.uploading_status(
+    function(id, result) {
+      onUploadingStatus(result);
+    },
+    function(code, message) {
+      console.log("Failed check uploading status: " + code + ": " + message);
+    } 
+  );
+}
+
+// request to update calibration status 
+function updateCalibrationStatus() {
+  calibrator.calibration_status(
+    function(id, result) {
+      onCalibrationStatus(result);
+    },
+    function(code, message) {
+      console.log("Failed check calibration status: " + code + ": " + message); 
+    } 
+  );
+}
+
+// on system status message
+// statuses["battery"] = {"capacity": 100, "percent": 50, "state": 0}
+// statuses["cpu"] = {"usage": [20, 10, 12, 21], "frequency": [1190, 1190, 1190, 1190]}
+// statuses["memory"] = {"total": 16000000, "used": 2000000, "free": 14000000}
+// statuses["storage"] = {"total": 128000100, "used": 16000100, "free": 86000100, "percent": 24}
+function onSystemStatus(status) {
+  // console.log("Battery level: " + status.level + " charging: " + status.charging);
+  document.getElementById("battlabel").innerHTML = status.battery.percent + "%";  
+  document.getElementById("disklabel").innerHTML = status.storage.free + "MB"; 
+}
+
+function onNetworkStatus(status) {
+  console.log("Network status"); 
+}
+
+// on live video status 
+function onLiveStatus(status) {
+  // console.log("Live status: " + status.enabled);
+  var img_url = status.enabled ? "url(images/green-light.png)" : "url(images/gray-light.png)";
+  var recording_button = document.getElementById('recordbtn')
+  recording_button.style["background-image"] = img_url;
+}
+
+// on uploading status 
+function onUploadingStatus(status) {
+  // console.log("Uploading status: " + status.enabled);
+  var img_url = status.enabled ? "url(images/green-light.png)" : "url(images/gray-light.png)";
+  var uploading_button = document.getElementById('uploadbtn')
+  uploading_button.style["background-image"] = img_url;
+}
+
+// on calibration status 
+function onCalibrationStatus(status) {
+  // console.log("Calibration status: " + status.enabled);
+  var img_url = status.enabled ? "url(images/green-light.png)" : "url(images/gray-light.png)";
+  var calibration_button = document.getElementById('calibbtn')
+  calibration_button.style["background-image"] = img_url;
+}
+
+window.onload = function() { 
+  // connect to server
+  connect(); 
+  // show default page 
+  showPage(default_page); 
+}
+</script>
+<style type="text/css">
+#header {
+  height: 65px; 
+  position: absolute;
+  top: 0; 
+  left: 0;
+  right: 0;  
+  overflow: hidden;
+  background-color: #f1f1f1;
+}
+
+#header img {
+  position: absolute; 
+  height: 55px;
+  left: 10px; 
+  bottom: 5px;
+}
+
+#header ul {
+  position: absolute; 
+  margin: 0;
+  right: 10px; 
+  bottom: 5px;
+  overflow: hidden;
+}
+
+#header ul li {
+  display: inline;
+  margin-left: 2px;
+}
+
+#header ul li button {
+  margin:0;
+}
+
+#header ul li button.icon-button {
+  background-image: url("images/gray-light.png");
+  background-repeat: no-repeat;
+  background-position: left 5px center;
+  background-size: 25px;
+  padding-left: 35px; 
+}
+
+#header ul li button:hover {
+  background-color: #ddd;
+}
+
+#header ul li button.active {
+  background-color: #ccc;
+}
+
+#main {
+  position: absolute;
+  top: 65px; 
+  bottom: 45px;
+  left: 0; 
+  right: 0; 
+  overflow: hidden;
+}
+
+#footer {
+  height: 45px; 
+  position: absolute;  
+  bottom: 0;  
+  left: 0; 
+  right: 0;
+  overflow: hidden; 
+  text-align: center;
+  background-color: #f1f1f1;
+}
+
+.foot-info-panel {
+  height: 45px; 
+  position: absolute;
+  top: 0; 
+  overflow: hidden;
+}
+
+.foot-info-panel label {
+  height: 40px; 
+  line-height: 40px;
+  margin: 0 5px; 
+  padding: 0 10px; 
+  position: relative;
+  overflow: hidden;
+  display: inline-block;
+}
+
+.foot-info-panel #connlabel {
+  background-image: url("images/disconnected.png");
+  background-repeat: no-repeat;
+  background-position: left 5px center;
+  background-size: 30px;
+  padding-left: 40px; 
+}
+
+.foot-info-panel #disklabel {
+  background-image: url("images/storage.png");
+  background-repeat: no-repeat;
+  background-position: left 5px center;
+  background-size: 25px;
+  padding-left: 35px; 
+}
+
+.foot-info-panel #battlabel {
+  background-image: url("images/battery.png");
+  background-repeat: no-repeat;
+  background-position: left 5px center;
+  background-size: 35px;
+  padding-left: 45px; 
+  margin-left: 15px;
+}
+
+</style>
+</head>
+<body>
+  <div id="header">
+    <img src="images/logo.png"/>
+    <ul>
+      <li><button class="btn icon-button" id="recordbtn" onclick="showPage('recording.html')">RECORDING</button></li>
+      <li><button class="btn icon-button" id="uploadbtn" onclick="showPage('uploading.html')">UPLOADING</button></li>
+      <li><button class="btn icon-button" id="calibbtn" onclick="showPage('calibration.html')">CALIBRATION</button></li>
+      <li><button class="btn" id="speedbtn" onclick="showPage('speedtest.html')">SPEED TEST</button></li>
+      <li><button class="btn" id="systembtn" onclick="showPage('system.html')">SYSTEM</button></li>
+    </ul>
+  </div>
+  <div id="main">
+    <iframe id="view" src="about:blank" width="100%" height="100%" scrolling="no" frameborder="0"></iframe>
+  </div>
+  <div id="footer">
+    <div class="foot-info-panel align-left">
+      <label id="connlabel">Disconnected</label>
+    </div>
+    <div class="foot-info-panel align-right">
+      <label id="disklabel">0MB</label>
+      <label id="battlabel">100%</label>
+    </div>
+  </div>
+</body>
+</html>

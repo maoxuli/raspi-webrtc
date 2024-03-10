@@ -1,0 +1,1476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta http-equiv="X-UA-Compatible" content="IE=edge"> 
+<meta name="format-detection" content="telephone=no,email=no,adress=no">
+<title>Recording</title> 
+<link rel="stylesheet" href="style.css">
+<script src="js/eventemitter2.min.js"></script>
+<script src="js/roslib.min.js"></script>
+<script src="js/cameraclient.js"></script>
+<!-- <script src="js/rectangle.js"></script> -->
+<script>
+// http://192.168.1.225:8085/camera/recording.html
+var hostname = window.location.hostname;
+if (!hostname) hostname = "127.0.0.1"; 
+
+// connection to camera service 
+// Todo: may share the single connection to all sub pages
+var connection = new CameraConnection(
+  function(error) { // error
+    console.log(error);
+    onConnected(false); 
+  }, 
+  function() { // connected
+    console.log('Connected!');
+    onConnected(true); 
+  }, 
+  function() { // close 
+    console.log('Connection closed');
+    onConnected(false);
+  }
+);
+
+// RPC clients  
+var footage = new Footage(connection); 
+var recorder = new Recorder(connection);
+var calibrator = new LiveCalib(connection); 
+
+// connect to camera 
+function connect() {
+  console.log("Connecting to: " + hostname); 
+  connection.connect(hostname);
+}
+
+// on connection status 
+function onConnected(connected) {
+  console.log("connected: " + connected);
+  if (connected) {
+    // do all status update here 
+    updateStatus();
+    // watch status 
+    footage.subscribe(function(status_message) {
+      onFootageMessage(status_message); 
+    });
+    recorder.subscribe(function(status_message) {
+      onRecorderMessage(status_message); 
+    });
+    calibrator.subscribe(function(status_message) {
+      onCalibratorMessage(status_message);
+    });
+  } 
+}
+
+// on footage status notification 
+function onFootageMessage(status_message) {
+  // console.log("on footage message..."); 
+  // console.log(status_message)
+  for (const notification of status_message) {
+    var method = notification.method;
+    if (method == "footage_status") {
+      onFootageStatus(notification.params); 
+    }
+    else {
+      // console.log("Ignore footage status with method: " + method)
+    }  
+  }
+}
+
+// on recorder status notification 
+function onRecorderMessage(status_message) {
+  // console.log("on recorder message..."); 
+  // console.log(status_message)
+  for (const notification of status_message) {
+    var method = notification.method;
+    if (method == "live_status") {
+      onLiveStatus(notification.params); 
+    }
+    else if (method == "recording_status") {
+      onRecordingStatus(notification.params); 
+    }
+    else if (method == "streaming_status") {
+      onStreamingStatus(notification.params); 
+    }
+    else {
+      // console.log("-- Ignore recorder status with method: " + method)
+    }  
+  }
+}
+
+// on calibrator status notification 
+function onCalibratorMessage(status_message) {
+  // console.log("on calibrator message..."); 
+  // console.log(status_message)
+  for (const notification of status_message) {
+    var method = notification.method;
+    if (method == "calibration_status") {
+      onCalibrationStatus(notification.params); 
+    }
+    else {
+      // console.log("Ignore calibrator status with method: " + method)
+    }  
+  }
+}
+
+var recorder_settings = {}; 
+
+function updateSensorParams() {
+  console.log("update sensor params")
+  recorder.check_config(["cameras"], 
+    function(id, result) {
+      if (result instanceof Object && "cameras" in result) {
+        recorder_settings["cameras"] = result["cameras"]; 
+        console.log("check sensors config result:");
+        console.log(recorder_settings["cameras"]); 
+        update_sensor_controls();
+      }
+    }, 
+    function(code, message) { 
+      console.log("Failed check recorder config status: " + message);
+    }
+  );
+}
+
+function updateStitchersParams() {
+  console.log("update stitchers params")
+  recorder.check_config(["stitchers"], 
+    function(id, result) {
+      if (result instanceof Object && "stitchers" in result) {
+        recorder_settings["stitchers"] = result["stitchers"]; 
+        console.log("check stitchers config result:");
+        console.log(recorder_settings["stitchers"]); 
+      }
+    }, 
+    function(code, message) { 
+      console.log("Failed check stitchers config status: " + message);
+    }
+  );
+}
+
+function updateStreamsParams() {
+  console.log("update streams params")
+  recorder.check_config(["streams"], 
+    function(id, result) {
+      if (result instanceof Object && "streams" in result) {
+        recorder_settings["streams"] = result["streams"]; 
+        console.log("check streams config result:");
+        console.log(recorder_settings["streams"]); 
+      }
+    }, 
+    function(code, message) { 
+      console.log("Failed check streams config status: " + message);
+    }
+  );
+}
+
+// request to update status 
+function updateStatus() {
+  updateFootageStatus();
+  updateLiveStatus(); 
+  updateRecordingStatus(); 
+  updateStreamingStatus(); 
+  updateCalibrationStatus(); 
+}
+
+// request to update footage status 
+function updateFootageStatus() {
+  console.log("update footage status..."); 
+  footage.footage_status(null, 
+    function(id, result) {
+      onFootageStatus(result);
+    }, 
+    function(code, message) { 
+      console.log("Failed check footage status: " + message);
+    }
+  );
+}
+
+// on footage status 
+// call by both status notification and check status 
+// Todo: will cause collision? 
+function onFootageStatus(status) {
+  // console.log("on footage status...");
+  // console.log(status); 
+  // clean select 
+  var footagesel = document.getElementById("footagesel"); 
+  for (var i = 0; i < footagesel.length; i++) {
+    var option = footagesel.options[i];
+    if (!(option.value)) continue; 
+    var footage_info = JSON.parse(option.value); 
+    if (!(footage_info["footage_id"] in status)) {
+      console.log("remove footage: " + footage_info["footage_id"]); 
+      footagesel.removeChild(option);
+    }
+  }
+  // update select 
+  for (footage_id in status) {
+    index = -1; 
+    for (var i = 0; i < footagesel.options.length; i++) {
+      var option = footagesel.options[i];
+      if (!(option.value)) continue; 
+      var footage_info = JSON.parse(option.value); 
+      if (footage_info["footage_id"] == footage_id) {
+        index = i; 
+        break;
+      }
+    }
+    if (index == -1) {
+      var opt = document.createElement("option"); 
+      opt.value = JSON.stringify(status[footage_id]); 
+      opt.appendChild(document.createTextNode(status[footage_id]["footage_name"])); 
+      footagesel.appendChild(opt); 
+      console.log("add footage: " + status[footage_id]); 
+    }
+  }
+}
+
+// request to update live recorder status 
+function updateLiveStatus() {
+  // console.log("update recorder status..."); 
+  recorder.live_status(null, 
+    function(id, result) {
+      onLiveStatus(result);
+    }, 
+    function(code, message) { 
+      console.log("Failed check recorder status: " + message);
+    }
+  );
+}
+
+// on live status 
+// call by both status notification and check status 
+// Todo: will cause collision? 
+function onLiveStatus(status) {
+  // console.log("on live status..."); 
+  update_enable_button(status.enabled); 
+  if (status.enabled) {
+    update_mode_sel(status.mode); 
+  }
+  else {
+    // clean status if recording is disabled 
+    update_start_button(0); 
+    update_pause_button(0);
+    update_recording_info("", 0, 0); 
+  }
+}
+
+// request to update recording status 
+function updateRecordingStatus() {
+  // console.log("update recording status..."); 
+  recorder.recording_status(null, 
+    function(id, result) {
+      onRecordingStatus(result);
+    }, 
+    function(code, message) { 
+      console.log("Failed check recording status: " + message);
+    }
+  );
+}
+
+// on recording status 
+// call by both status notification and check status 
+// Todo: will cause collision? 
+function onRecordingStatus(status) {
+  // console.log("on recording status..."); 
+  for (const rec_status of status) {
+    if (rec_status.enabled) {
+      update_footage_select(rec_status.footage_id); 
+      update_start_button(rec_status.state);
+      update_pause_button(rec_status.state);
+      if (rec_status.state > 0) {
+        // update recording info if in started status 
+        // otherwise keep the old info 
+        update_recording_info(rec_status.filename, rec_status.filesize, rec_status.duration);  
+      }
+      break; 
+    }
+  }
+}
+
+// request to update recording status 
+function updateStreamingStatus() {
+  // console.log("update streaming status..."); 
+  recorder.streaming_status(null, 
+    function(id, result) {
+      onStreamingStatus(result);
+    }, 
+    function(code, message) { 
+      console.log("Failed check streaming status: " + message);
+    }
+  );
+}
+
+// on stremaing status 
+// call by both status notification and check status 
+// Todo: will cause collision? 
+function onStreamingStatus(status) {
+  // console.log("on streaming status..."); 
+  for (const stream_status of status) {
+    if (stream_status.enabled) {
+      // console.log("stream status: " + stream_status.state);
+      break; 
+    }
+  }
+}
+
+// request to update calibration status 
+function updateCalibrationStatus() {
+  // console.log("update calibration status..."); 
+  calibrator.calibration_status(null, 
+    function(id, result) {
+      onCalibrationStatus(result);
+    }, 
+    function(code, message) { 
+      console.log("Failed check calibration status: " + message);
+    }
+  );
+}
+
+// on calibration status 
+// call by both status notification and check status 
+// Todo: will cause collision? 
+function onCalibrationStatus(status) {
+  // console.log("on calibration status..."); 
+  // console.log("calibration enabled: " + status.enabled);
+}
+
+// update mode selection 
+function update_mode_sel(mode) {
+  // console.log("updatea mode sel: " + mode);
+  var modesel = document.getElementById("modesel");
+  var modeopt = modesel.options[modesel.selectedIndex];
+  // console.log("selected mode: " + modeopt.value);
+  if (mode != modeopt.value) {
+    var options = modesel.options;
+    for(var i = 0; i < options.length; i++) {
+      if (options[i].value == mode) {
+        options[i].selected = 'selected'; 
+      }
+    } 
+  }
+}
+
+// updatea enable button 
+function update_enable_button(enabled) {
+  // console.log("Update enable button for status: " + enabled); 
+  recording_button = document.getElementById('recordingcheck');
+  recording_button.checked = enabled; 
+  recording_button.indeterminate = false;
+  document.getElementById('modesel').disabled = enabled;
+}
+
+function update_footage_select(footage_id) {
+  // console.log("Update footage select: " + footage_id); 
+  if (!(footage_id)) return; 
+  var footagesel = document.getElementById("footagesel"); 
+  for (var i = 0; i < footagesel.length; i++) {
+    var option = footagesel.options[i];
+    if (!(option.value)) continue; 
+    var footage_info = JSON.parse(option.value); 
+    if (footage_info["footage_id"] == footage_id) {
+      option.selected = true; 
+    }
+  }
+}
+
+// updatea start|stop buttons 
+// stopped, recording, paused 
+function update_start_button(state) {
+  // console.log("Update start button for state: " + state); 
+  document.getElementById('startcheck').checked = (state > 0); 
+  var startlabel = document.getElementById("startbtn").getElementsByTagName("span")[0];
+  startlabel.innerHTML = state > 0 ? "STOP" : "START"; 
+  document.getElementById('footagesel').disabled = (state > 0);
+
+}
+
+// updatea pause|resume buttons 
+// stopped, recording, paused 
+function update_pause_button(state) {
+  // console.log("Update pause button for state: " + state); 
+  document.getElementById('pausecheck').disabled = (state < 1); 
+  document.getElementById("pausebtn").disabled = (state < 1);
+  document.getElementById('pausecheck').checked = state > 1; 
+  var pauselabel = document.getElementById("pausebtn").getElementsByTagName("span")[0];
+  pauselabel.innerHTML = state > 1 ? "RESUME" : "PAUSE"; 
+}
+
+// update recording file info 
+function update_recording_info(filename, filesize, duration) {
+  // console.log("update recording info: " + filename + ", " + filesize + ", " + duration);
+  // var filename = filename.substring(status.filename.lastIndexOf('/') + 1);
+  var filename = filename.replace(/^.*[\\\/]/, '')
+  document.getElementById('filename').innerHTML = filename;
+  document.getElementById('filesize').innerHTML = filesize + "KB"; 
+  document.getElementById('fileduration').innerHTML = new Date(duration * 1000).toISOString().substr(11, 8); 
+}
+
+// enable live video 
+// the server will determine if it needs real re-enable 
+// for target live video mode 
+function enable_live() {
+  console.log("enable live"); 
+  var modesel = document.getElementById("modesel");
+  var mode = modesel.options[modesel.selectedIndex].value;
+  console.log("selectd mode: " + mode);
+  recorder.enable_live({"mode": parseInt(mode)}, 
+    function(id, result) {
+      console.log("Enable live result: " + result); 
+      // updata live status anyway 
+      updateLiveStatus();
+    }, 
+    function(code, message) { 
+      console.log("Enable live error: " + message); 
+      alert(message); 
+      // updata live status anyway 
+      updateLiveStatus();
+    }
+  ); 
+}
+
+// disable live video 
+function disable_live() {
+  console.log("Disable recorder");
+  recorder.disable_live(null,
+    function(id, result) {
+      console.log("Disable live result: " + result); 
+      // updata live status anyway 
+      updateLiveStatus();
+    },
+    function(code, message) {
+      console.log("Disable live error: " + message); 
+      // updata live status anyway 
+      updateLiveStatus();
+    }
+  ); 
+}
+
+// start recording 
+function start_recording() {
+  console.log("Start recording"); 
+  footagesel = document.getElementById("footagesel");
+  footage_info = footagesel.options[footagesel.selectedIndex].value;
+  if (!(footage_info)) {
+    footage.prepare_footage(null, 
+      function(id, result) {
+        console.log("Prepare footage result: " + result); 
+        start_footage_recording(result); 
+        updateFootageStatus(); 
+      }, 
+      function(code, message) { 
+        console.log("Prepare footage error: " + message); 
+      }
+    )
+  }
+  else {
+    console.log("Footage: " + footage_info); 
+    start_footage_recording(JSON.parse(footage_info)); 
+  }
+}
+
+function start_footage_recording(footage_info) {
+  console.log("Start recording for footage: " + footage_info); 
+  recorder.start_recording(footage_info, 
+    function(id, result) {
+      console.log("Start recording result: " + result);
+      // updata recording status anyway 
+      updateRecordingStatus();
+    }, 
+    function(code, message) { 
+      console.log("Start recording error: " + message); 
+      // updata recording status anyway 
+      updateRecordingStatus();
+    }
+  ); 
+}
+
+// stop recording 
+function stop_recording() {
+  console.log("Stop recording");
+  recorder.stop_recording(null,
+    function(id, result) {
+      console.log("Stop recording result: " + result);
+      // updata recording status anyway 
+      updateRecordingStatus();
+    },
+    function(code, message) {
+      console.log("Stop recording error: " + message); 
+      // updata recording status anyway 
+      updateRecordingStatus();
+    }
+  ); 
+}
+
+// pause recording 
+function pause_recording() {
+  console.log("Pause recording");
+  recorder.pause_recording(null,
+    function(id, result) {
+      console.log("Pause recording result: " + result);
+      // updata recording status anyway 
+      updateRecordingStatus();
+    },
+    function(code, message) {
+      console.log("Pause recording error: " + message); 
+      // updata recording status anyway 
+      updateRecordingStatus();
+    }
+  ); 
+}
+
+// stop recording 
+function resume_recording() {
+  console.log("Resume recording");
+  recorder.resume_recording(null,
+    function(id, result) {
+      console.log("Resume recording result: " + result);
+      // updata recording status anyway 
+      updateRecordingStatus();
+    },
+    function(code, message) {
+      console.log("resume recording error: " + message); 
+      // updata recording status anyway 
+      updateRecordingStatus();
+    }
+  ); 
+}
+
+// start|stop recording 
+function pauseRecord() {
+  var pausecheck = document.getElementById('pausecheck');
+  if (pausecheck.checked) 
+    pause_recording()
+  else 
+    resume_recording(); 
+}
+
+// start|stop recording 
+function startRecord() {
+  var startcheck = document.getElementById('startcheck');
+  if (startcheck.checked) 
+    start_recording()
+  else 
+    stop_recording(); 
+}
+
+// click on recording button 
+function enableRecording() {
+  recording_button = document.getElementById('recordingcheck');
+  recording_button.indeterminate = true;
+  if (recording_button.checked)
+    enable_live();
+  else
+    disable_live(); 
+}
+
+// "capture_params": {
+//   "white_balance": 1,
+//   "saturation": 1.0,
+//   "exposure_time_range": null,
+//   "gain_range": null, 
+//   "digital_gain_range": null,
+//   "tnr_mode": 1,
+//   "tnr_strength": -1.0,
+//   "edge_enhancement_mode": 1,
+//   "edge_enhancement_strength": -1.0,
+//   "aeantibanding_mode": 1,
+//   "exposure_compensation": 0,
+//   "ae_lock": false,
+//   "awb_lock": false
+// }
+
+function update_sensor_controls() {
+  if ("cameras" in recorder_settings) {
+    params = recorder_settings["cameras"];
+    wb_mode = params[0].capture_params.white_balance; 
+    document.getElementById("wb_mode").options.selectedIndex = wb_mode; 
+
+    document.getElementById("saturation").value = parseFloat(params[0].capture_params.saturation);
+
+    tnr_mode = params[0].capture_params.tnr_mode; 
+    document.getElementById("tnr_mode").options.selectedIndex = tnr_mode; 
+
+    document.getElementById("tnr_strength").value = parseFloat(params[0].capture_params.tnr_strength); 
+
+    ee_mode = params[0].capture_params.edge_enhancement_mode; 
+    document.getElementById("ee_mode").options.selectedIndex = ee_mode; 
+
+    document.getElementById("ee_strength").value = parseFloat(params[0].capture_params.edge_enhancement_strength); 
+
+    aeantibanding_mode = params[0].capture_params.aeantibanding_mode; 
+    document.getElementById("aeantibanding").options.selectedIndex = aeantibanding_mode; 
+
+    document.getElementById("exposurecompensation").value = parseFloat(params[0].capture_params.exposure_compensation); 
+
+    document.getElementById("aelock").checked = params[0].capture_params.ae_lock;
+
+    document.getElementById("awblock").checked = params[0].capture_params.awb_lock;
+  }
+}
+
+function white_balance_change() {
+  console.log("white balance mode")
+  if (!("cameras" in recorder_settings)) return; 
+  wb_mode = document.getElementById("wb_mode").selectedIndex; 
+  // config = {"cameras[0]/capture_parames/white_balance": wb_mode, "cameras[1]/capture_parames/white_balance": wb_mode}
+  recorder_settings["cameras"][0].capture_params.white_balance = wb_mode; 
+  recorder_settings["cameras"][1].capture_params.white_balance = wb_mode; 
+  recorder.update_config({"cameras": recorder_settings["cameras"]},
+    function(id, result) {
+      console.log("config result: " + result);
+    },
+    function(code, message) {
+      console.log("config error: " + message); 
+    }
+  ); 
+}
+
+function saturation_change() {
+  console.log("saturation")
+  if (!("cameras" in recorder_settings)) return; 
+  saturation = parseFloat(document.getElementById("saturation").value); 
+  // config = {"cameras[0]/capture_parames/saturation": saturation, "cameras[1]/capture_parames/saturation": saturation}
+  recorder_settings["cameras"][0].capture_params.saturation = saturation; 
+  recorder_settings["cameras"][1].capture_params.saturation = saturation; 
+  recorder.update_config({"cameras": recorder_settings["cameras"]},
+    function(id, result) {
+      console.log("config result: " + result);
+    },
+    function(code, message) {
+      console.log("config error: " + message); 
+    }
+  ); 
+}
+
+function tnr_mode_change() {
+  console.log("tnr mode")
+  if (!("cameras" in recorder_settings)) return; 
+  tnr_mode = document.getElementById("tnr_mode").selectedIndex; 
+  // config = {"cameras[0]/capture_parames/tnr_mode": tnr_mode, "cameras[1]/capture_parames/tnr_mode": tnr_mode}
+  recorder_settings["cameras"][0].capture_params.tnr_mode = tnr_mode; 
+  recorder_settings["cameras"][1].capture_params.tnr_mode = tnr_mode; 
+  recorder.update_config({"cameras": recorder_settings["cameras"]},
+    function(id, result) {
+      console.log("config result: " + result);
+    },
+    function(code, message) {
+      console.log("config error: " + message); 
+    }
+  );
+}
+
+function tnr_strength_change() {
+  console.log("tnr strength")
+  if (!("cameras" in recorder_settings)) return; 
+  tnr_strength = parseFloat(document.getElementById("tnr_strength").value); 
+  // config = {"cameras[0]/capture_parames/tnr_strength": tnr_strength, "cameras[1]/capture_parames/tnr_strength": tnr_strength}
+  recorder_settings["cameras"][0].capture_params.tnr_strength = tnr_strength; 
+  recorder_settings["cameras"][1].capture_params.tnr_strength = tnr_strength; 
+  recorder.update_config({"cameras": recorder_settings["cameras"]},
+    function(id, result) {
+      console.log("config result: " + result);
+    },
+    function(code, message) {
+      console.log("config error: " + message); 
+    }
+  );
+}
+
+function ee_mode_change() {
+  console.log("ee mode")
+  if (!("cameras" in recorder_settings)) return; 
+  ee_mode = document.getElementById("ee_mode").selectedIndex; 
+  // config = {"cameras[0]/capture_parames/edge_enhancement_mode": ee_mode, "cameras[1]/capture_parames/edge_enhancement_mode": ee_mode}
+  recorder_settings["cameras"][0].capture_params.edge_enhancement_mode = ee_mode; 
+  recorder_settings["cameras"][1].capture_params.edge_enhancement_mode = ee_mode; 
+  recorder.update_config({"cameras": recorder_settings["cameras"]},
+    function(id, result) {
+      console.log("config result: " + result);
+    },
+    function(code, message) {
+      console.log("config error: " + message); 
+    }
+  );
+}
+
+function ee_strength_change() {
+  console.log("ee strength")
+  if (!("cameras" in recorder_settings)) return; 
+  ee_strength = parseFloat(document.getElementById("ee_strength").value); 
+  // config = {"cameras[0]/capture_parames/edge_enhancement_strength": ee_strength, "cameras[1]/capture_parames/edge_enhancement_strength": ee_strength}
+  recorder_settings["cameras"][0].capture_params.edge_enhancement_strength = ee_strength; 
+  recorder_settings["cameras"][1].capture_params.edge_enhancement_strength = ee_strength; 
+  recorder.update_config({"cameras": recorder_settings["cameras"]},
+    function(id, result) {
+      console.log("config result: " + result);
+    },
+    function(code, message) {
+      console.log("config error: " + message); 
+    }
+  );
+}
+
+function aeantibanding_change() {
+  console.log("aeantibanding")
+  if (!("cameras" in recorder_settings)) return; 
+  aeantibanding = document.getElementById("aeantibanding").selectedIndex; 
+  // config = {"cameras[0]/capture_parames/aeantibanding_mode": aeantibanding, "cameras[1]/capture_parames/aeantibanding_mode": aeantibanding}
+  recorder_settings["cameras"][0].capture_params.aeantibanding_mode = aeantibanding; 
+  recorder_settings["cameras"][1].capture_params.aeantibanding_mode = aeantibanding; 
+  recorder.update_config({"cameras": recorder_settings["cameras"]},
+    function(id, result) {
+      console.log("config result: " + result);
+    },
+    function(code, message) {
+      console.log("config error: " + message); 
+    }
+  );
+}
+
+function exposure_compenstation_change() {
+  console.log("exposure_compenstation")
+  if (!("cameras" in recorder_settings)) return; 
+  exposurecompensation = parseFloat(document.getElementById("exposurecompensation").value); 
+  // config = {"cameras[0]/capture_parames/exposure_compensation": exposurecompensation, "cameras[1]/capture_parames/exposure_compensation": exposurecompensation}
+  recorder_settings["cameras"][0].capture_params.exposure_compensation = exposurecompensation; 
+  recorder_settings["cameras"][1].capture_params.exposure_compensation = exposurecompensation; 
+  recorder.update_config({"cameras": recorder_settings["cameras"]},
+    function(id, result) {
+      console.log("config result: " + result);
+    },
+    function(code, message) {
+      console.log("config error: " + message); 
+    }
+  ); 
+}
+
+function aelock_change() {
+  console.log("aelock")
+  if (!("cameras" in recorder_settings)) return; 
+  aelock = document.getElementById("aelock").checked; 
+  // config = {"cameras[0]/capture_parames/ae_lock": aelock, "cameras[1]/capture_parames/ae_lock": aelock}
+  recorder_settings["cameras"][0].capture_params.ae_lock = aelock; 
+  recorder_settings["cameras"][1].capture_params.ae_lock = aelock; 
+  recorder.update_config({"cameras": recorder_settings["cameras"]},
+    function(id, result) {
+      console.log("config result: " + result);
+    },
+    function(code, message) {
+      console.log("config error: " + message); 
+    }
+  ); 
+}
+
+function awblock_change() {
+  console.log("awblock")
+  if (!("cameras" in recorder_settings)) return; 
+  awblock = document.getElementById("awblock").checked; 
+  // config = {"cameras[0]/capture_parames/awb_lock": awblock, "cameras[1]/capture_parames/awb_lock": awblock}
+  recorder_settings["cameras"][0].capture_params.awb_lock = awblock; 
+  recorder_settings["cameras"][1].capture_params.awb_lock = awblock; 
+  recorder.update_config({"cameras": recorder_settings["cameras"]},
+    function(id, result) {
+      console.log("config result: " + result);
+    },
+    function(code, message) {
+      console.log("config error: " + message); 
+    }
+  ); 
+}
+
+function showSettings() {
+  var settings_popup = document.getElementById('settings_popup'); 
+  if (settings_popup.style['display'] != 'block') {
+    settings_popup.style['display'] = 'block';
+    updateSensorParams();  
+  }
+  else {
+    settings_popup.style['display'] = 'none';
+  }
+}
+
+function cancelSettings() {
+  var settings_popup = document.getElementById('settings_popup'); 
+  settings_popup.style['display'] = 'none';
+}
+
+function showCalib() {
+  var calib_popup = document.getElementById('calib_popup'); 
+  if (calib_popup.style['display'] != 'block') {
+    calib_popup.style['display'] = 'block';
+    // refreshROI();
+  }
+  else {
+    calib_popup.style['display'] = 'none';
+  }
+}
+
+function cancelCalib() {
+  stopCalib();
+  var calib_popup = document.getElementById('calib_popup'); 
+  calib_popup.style['display'] = 'none';
+}
+
+function startCalib() {
+  document.getElementById("calib_apply").disabled = true;
+  calibrator.online_calib({"rounds": 20, "interval": 1},
+    function(id, feedback) { 
+      console.log("online calib feedback: " + feedback.progress);
+      document.getElementById("calib_progress").value = parseInt(feedback.progress);
+      var calib_image = document.getElementById("calib_image");
+      calib_image.src = "data:image/jpeg;base64," + feedback.images[0].data;
+    }, 
+    function(id, result) { 
+      console.log("online calib result: " + result.progress);
+      document.getElementById("calib_progress").value = parseInt(result.progress);
+      var calib_image = document.getElementById("calib_image");
+      calib_image.src = "data:image/jpeg;base64," + result.images[0].data;
+      document.getElementById("calib_apply").disabled = false;
+    }, 
+    function(code, message) { 
+      console.log("online calib error: " + message); 
+      document.getElementById("calib_msg").value = message; 
+      document.getElementById("calib_progress").value = 0;
+      document.getElementById("calib_image").src = null;
+    }
+  );
+}
+
+function stopCalib() {
+  console.log("stop calibration");
+  calibrator.cancel_online_calib();
+}
+
+function applyCalib() {
+  console.log("apply calibration");
+  calibrator.save_calib(null, 
+    function(id, result) {
+      console.log("Save calib return: " + result); 
+      // if (result) alert("Calibraiton saved sucessfully. Re-enable the recording or resetart system to apply."); 
+      document.getElementById("calib_apply").disabled = true;
+      recorder.disable_live(null,
+        function(id, result) {
+          console.log("Disable live result: " + result); 
+          // updata live status anyway 
+          updateLiveStatus();
+          enable_live();
+          cancelCalib();
+        },
+        function(code, message) {
+          console.log("Disable live error: " + message); 
+          // updata live status anyway 
+          updateLiveStatus();
+        }
+      ); 
+    }, 
+    function(code, message) { 
+      console.log("Save calib error: " + message); 
+    }
+  ); 
+}
+
+// function refreshROI() {
+//   console.log("Refresh ROI...");
+//   updateStitchersParams();
+//   updateStreamsParams();
+//   recorder.stitching_snapshot(null, 
+//     function(id, result) {
+//       // console.log("stitching snapshot result: " + result);
+//       var calib_image = document.getElementById("calib_image");
+//       calib_image.src = "data:image/jpeg;base64," + result[0].data;
+//     }, 
+//     function(code, message) { 
+//       console.log("stitching snapshot error: " + message); 
+//     }
+//   ); 
+// }
+
+// var roi_drawer = null; 
+// var roi_rect = null; 
+
+// function resetROI() {
+//   console.log("Reset ROI..."); 
+//   if ("stitchers" in recorder_settings) {
+//     var stitchers_params = recorder_settings["stitchers"][0]; 
+//     stitchers_params.output_roi[0] = 0;
+//     stitchers_params.output_roi[1] = 0;
+//     stitchers_params.output_roi[2] = 0;
+//     stitchers_params.output_roi[3] = 0;
+//     stitchers_params.output_size[0] = 4096;
+//     stitchers_params.output_size[1] = 3040; 
+//     recorder.update_config({"stitchers": recorder_settings["stitchers"]},
+//       function(id, result) {
+//         console.log("update config result: " + result);
+//       },
+//       function(code, message) {
+//         console.log("update config error: " + message); 
+//       }
+//     ); 
+//   }
+//   if ("streams" in recorder_settings) {
+//     var streams_params = recorder_settings["streams"][0]; 
+//     streams_params.input_size[0] = 1024;
+//     streams_params.input_size[1] = 760; 
+//     recorder.update_config({"streams": recorder_settings["streams"]},
+//       function(id, result) {
+//         console.log("update config result: " + result);
+//       },
+//       function(code, message) {
+//         console.log("update config error: " + message); 
+//       }
+//     ); 
+//   }
+//   alert("Settings has been saved, please re-enable the recording to apply it."); 
+// }
+
+// function applyROI() {
+//   if ("stitchers" in recorder_settings && "streams" in recorder_settings) {
+//     var stitchers_params = recorder_settings["stitchers"][0]; 
+//     var streams_params = recorder_settings["streams"][0]; 
+
+//     var calib_image = document.getElementById("calib_image");
+//     console.log("calib_image width: " + calib_image.naturalWidth);
+//     console.log("calib_image height: " + calib_image.naturalHeight);
+//     var roi_canvas = document.getElementById("roi_canvas");
+//     var canvas_rect = roi_canvas.getBoundingClientRect();
+//     console.log("canvas width: " + canvas_rect.width);
+//     console.log("canvas height: " + canvas_rect.height);
+//     console.log("roi rect:");
+//     console.log(roi_rect.points[0]);
+//     roi_lt = roi_rect.points[0][0];
+//     roi_rb = roi_rect.points[0][2];
+//     roi_lt.x = roi_lt.x < 0 ? 0 : roi_lt.x; 
+//     roi_lt.y = roi_lt.y < 0 ? 0 : roi_lt.y; 
+//     roi_rb.x = roi_rb.x >= canvas_rect.width ? canvas_rect.width - 1 : roi_rb.x; 
+//     roi_rb.y = roi_rb.y >= canvas_rect.height ? canvas_rect.height - 1 : roi_rb.y; 
+
+//     roi_lt.x = parseInt(roi_lt.x * calib_image.naturalWidth / canvas_rect.width);
+//     roi_lt.y = parseInt(roi_lt.y * calib_image.naturalHeight / canvas_rect.height);
+//     roi_rb.x = parseInt(roi_rb.x * calib_image.naturalWidth / canvas_rect.width);
+//     roi_rb.y = parseInt(roi_rb.y * calib_image.naturalHeight / canvas_rect.height);
+
+//     roi_lt.x = roi_lt.x < 0 ? 0 : roi_lt.x; 
+//     roi_lt.y = roi_lt.y < 0 ? 0 : roi_lt.y; 
+//     roi_rb.x = roi_rb.x >= calib_image.naturalWidth ? calib_image.naturalWidth - 1 : roi_rb.x; 
+//     roi_rb.y = roi_rb.y >= calib_image.naturalHeight ? calib_image.naturalHeight - 1 : roi_rb.y; 
+
+//     console.log("roi left: " + roi_lt.x);
+//     console.log("roi top: " + roi_lt.y);
+//     console.log("roi right: " + roi_rb.x);
+//     console.log("roi bottom: " + roi_rb.y);
+//     stitchers_params.output_roi[0] = roi_lt.x; 
+//     stitchers_params.output_roi[1] = roi_lt.y; 
+//     stitchers_params.output_roi[2] = roi_rb.x; 
+//     stitchers_params.output_roi[3] = roi_rb.y; 
+//     var w = parseInt(roi_rb.x - roi_lt.x); 
+//     var d = 4096.0 / w; 
+//     w = 4096; 
+//     var h = parseInt((roi_rb.y - roi_lt.y) * d);
+//     h = parseInt(h / 2.0) * 2;  
+//     console.log("roi w: " + w);
+//     console.log("roi h: " + h);
+//     stitchers_params.output_size[0] = w;
+//     stitchers_params.output_size[1] = h; 
+//     streams_params.input_size[0] = parseInt(w / 8) * 2;
+//     streams_params.input_size[1] = parseInt(h / 8) * 2; 
+
+//     recorder.update_config({"stitchers": recorder_settings["stitchers"], "streams": recorder_settings["streams"]},
+//       function(id, result) {
+//         console.log("update config result: " + result);
+//         if (result) {
+//           alert("Settings has been saved, please re-enable the recording to apply it."); 
+//         }
+//       },
+//       function(code, message) {
+//         console.log("update config error: " + message); 
+//       }
+//     ); 
+//   }
+// }
+
+// function update_roi_rect() {
+//   if ("stitchers" in recorder_settings) {
+//     var params = recorder_settings["stitchers"][0]; 
+//     var output_left = params.output_roi[0];
+//     var output_top = params.output_roi[1];
+//     var output_right = params.output_roi[2];
+//     var output_bottom = params.output_roi[3];
+//     console.log("output left: " + output_left);
+//     console.log("output top: " + output_top);
+//     console.log("output right: " + output_right);
+//     console.log("output bottom: " + output_bottom);
+
+//     var calib_image = document.getElementById("calib_image");
+//     console.log("calib_image width: " + calib_image.naturalWidth);
+//     console.log("calib_image height: " + calib_image.naturalHeight);
+//     var roi_canvas = document.getElementById("roi_canvas");
+//     var canvas_rect = roi_canvas.getBoundingClientRect();
+//     console.log("canvas width: " + canvas_rect.width);
+//     console.log("canvas height: " + canvas_rect.height);
+
+//     roi_drawer.removePolygon(roi_rect); 
+//     if ((output_right - output_left) == 0 || (output_bottom - output_top) == 0) {
+//       var roi_x = parseInt(canvas_rect.width / 2);
+//       var roi_y = parseInt(canvas_rect.height / 2);
+//       var roi_w = parseInt(canvas_rect.width * 0.9);
+//       var roi_h = parseInt(canvas_rect.height * 0.6);
+//       console.log("roi x: " + roi_x);
+//       console.log("roi y: " + roi_y);
+//       console.log("roi w: " + roi_w);
+//       console.log("roi h: " + roi_h);
+//       roi_rect = new DragableAndScalableRect({
+//           x: roi_x,
+//           y: roi_y,
+//           width: roi_w,
+//           height: roi_h,
+//           minWidth: 100,
+//           minHeight: 100,
+//           cornerWidth: 20
+//       });
+//     }
+//     else {
+//       var roi_x = parseInt((output_right + output_left) / 2 * canvas_rect.width / calib_image.naturalWidth);
+//       var roi_y = parseInt((output_top + output_bottom) / 2  * canvas_rect.height / calib_image.naturalHeight);
+//       var roi_w = parseInt((output_right - output_left) * canvas_rect.width / calib_image.naturalWidth);
+//       var roi_h = parseInt((output_bottom - output_top) * canvas_rect.width / calib_image.naturalWidth);
+//       console.log("roi x: " + roi_x);
+//       console.log("roi y: " + roi_y);
+//       console.log("roi w: " + roi_w);
+//       console.log("roi h: " + roi_h);
+//       roi_rect = new DragableAndScalableRect({
+//           x: roi_x,
+//           y: roi_y,
+//           width: roi_w,
+//           height: roi_h,
+//           minWidth: 100,
+//           minHeight: 100,
+//           cornerWidth: 20
+//       });
+//     }
+//     roi_drawer.addPolygon(roi_rect);
+//   }
+// }
+
+// function showRoiCanvas() {
+//   var calib_image = document.getElementById("calib_image");
+//   var roi_canvas = document.getElementById("roi_canvas");
+//   var image_rect = calib_image.getBoundingClientRect();
+//   roi_canvas.style.width = parseInt(image_rect.width) + "px"; 
+//   roi_canvas.style.height = parseInt(image_rect.height) + "px"; 
+//   roi_drawer = new Drawer('#roi_canvas');
+//   update_roi_rect();
+// }
+
+function adjust_image_size() {
+  var calib_image_view = document.getElementById("calib_image_view");
+  var calib_image = document.getElementById("calib_image");
+  // console.log("calib_image width: " + calib_image.naturalWidth);
+  // console.log("calib_image height: " + calib_image.naturalHeight);
+  if (calib_image.naturalWidth/calib_image.naturalHeight > calib_image_view.clientWidth/calib_image_view.clientHeight) { // wide image 
+    calib_image.style.width = "100%";
+    calib_image.style.height = "auto";
+  }
+  else { // tall image 
+    calib_image.style.width = "auto";
+    calib_image.style.height = "100%";
+  }
+  calib_image.style.display = "block";
+}
+
+window.onclose = function() {
+  closeCalib(); 
+}
+
+window.onload = function() {
+  // hook of calib image loading 
+  var calib_image = document.getElementById("calib_image");
+  calib_image.style.display = "none";
+  calib_image.onerror = function() {
+    var calib_image = document.getElementById("calib_image");
+    calib_image.style.display = "none"; 
+  };
+  calib_image.onload = function() {
+    adjust_image_size();
+    // showRoiCanvas();
+  };
+
+  // connection to camera 
+  connect();
+  // enable preview 
+  document.getElementById("video-view").contentWindow.location.replace("videoview.html");
+}
+</script>
+<style type="text/css">
+#settings_popup {
+  display: none; 
+  position: absolute;
+  width: 250px;
+  right: 0;
+  top: 0;
+  bottom: 90px;
+  text-align: center;
+  background-color: #ccc;
+  overflow: hidden; 
+}
+
+#settings_popup div {
+  padding: 10px 0; 
+}
+
+#settings_popup input[type=number] {
+  height: 30px; 
+}
+ 
+#calib_popup {
+  display: none; 
+  position: absolute;
+  left: 100px;
+  right: 100px;
+  top: 0;
+  bottom: 55px;
+  text-align: center;
+  background-color: #ccc;
+  overflow: hidden;
+}
+
+#calib_control {
+  position: absolute; 
+  bottom: 0; 
+  left: 0;
+  right: 0; 
+  height: 50px;
+  margin: auto; 
+}
+
+#calib_image_view {   
+  position: absolute;  
+  top: 0;  
+  bottom: 60px;  
+  left: 0;  
+  right: 0;  
+  margin: auto;
+  background-color: #000;
+}
+
+#calib_image {  
+  max-width: 100%; 
+  max-height: 100%;  
+  width: auto;
+  height: auto;
+  position: absolute;  
+  top: 0;  
+  bottom: 0;  
+  left: 0;  
+  right: 0;  
+  margin: auto;
+  display: block;
+}
+
+#roi_canvas {
+  max-width: 100%; 
+  max-height: 100%;  
+  width: auto;
+  height: auto;
+  position: absolute;  
+  top: 0;  
+  bottom: 0;  
+  left: 0;  
+  right: 0;  
+  margin: auto;
+  display: block;
+} 
+
+#main {
+  position: absolute;
+  top: 0;
+  bottom: 90px;
+  left: 0; 
+  right: 0; 
+  overflow: hidden;
+}
+
+#info {
+  height: 30px; 
+  position: absolute;  
+  bottom: 55px;  
+  left: 0; 
+  right: 0;
+  overflow: hidden; 
+  text-align: center;
+}
+
+.record-info-panel {
+  height: 25px; 
+  position: absolute;
+  top: 0; 
+  overflow: hidden;
+}
+
+.record-info-panel label {
+  height: 25px; 
+  line-height: 25px;
+  margin: 0; 
+  padding: 0 10px; 
+  font-size: 95%;
+  position: relative;
+  overflow: hidden;
+}
+
+.info-panel {
+  height: 20px; 
+  position: absolute; 
+  top: 5px; 
+  bottom: 5px;  
+  overflow: hidden; 
+}
+
+/* Button with check status */
+.checkbutton {
+  display: inline-block;
+  position: relative;
+  margin: 0; 
+}
+
+.checkbutton input {
+  display: none;
+}
+
+.checkbutton span {
+  display: inline-block;
+  position: relative;
+  height: 35px; 
+  line-height: 35px;
+  margin: 0 2px; 
+  padding: 0 10px;
+  font-size: 100%; 
+  color: #444; 
+  font-family: Arial, Helvetica, sans-serif;
+  text-align: left;
+  background-color:#f1f1f1;
+  border: none;
+  cursor: pointer;
+}
+
+.checkbutton span:hover {
+  background-color: #ddd;
+}
+
+#footagesel {
+  min-width: 180px; 
+}
+
+</style>
+</head>
+<body> 
+  <div id="main">
+    <iframe id="video-view" src="" width="100%" height="100%" scrolling="no" frameborder="0"></iframe>
+  </div>
+  <div id="info">
+    <div class="record-info-panel align-left">
+      <label id="filename"></label>
+    </div>
+    <div class="record-info-panel align-right">
+      <label id="filesize">0KB</label>
+      <label>|</label>
+      <label id="fileduration">00:00:00</label>
+    </div>
+  </div>
+  <div id="settings_popup">
+    <div>
+      <!--
+      // wbmode
+      // White balance affects the color temperature of the photo
+      // flags: readable, writable
+      // Enum "GstNvArgusCamWBMode" Default: 1, "auto"
+      //     (0): off              - GST_NVCAM_WB_MODE_OFF
+      //     (1): auto             - GST_NVCAM_WB_MODE_AUTO
+      //     (2): incandescent     - GST_NVCAM_WB_MODE_INCANDESCENT
+      //     (3): fluorescent      - GST_NVCAM_WB_MODE_FLUORESCENT
+      //     (4): warm-fluorescent - GST_NVCAM_WB_MODE_WARM_FLUORESCENT
+      //     (5): daylight         - GST_NVCAM_WB_MODE_DAYLIGHT
+      //     (6): cloudy-daylight  - GST_NVCAM_WB_MODE_CLOUDY_DAYLIGHT
+      //     (7): twilight         - GST_NVCAM_WB_MODE_TWILIGHT
+      //     (8): shade            - GST_NVCAM_WB_MODE_SHADE
+      //     (9): manual           - GST_NVCAM_WB_MODE_MANUAL
+      -->
+      <label>white balance</label>
+      <select id="wb_mode" onchange="white_balance_change()">
+        
+        <option value="0">Off</option>
+        <option value="1" selected="selected">Auto</option>
+        <option value="2">Incandescent</option>
+        <option value="3">Fluorescent</option>
+        <option value="4">warm-fluorescent</option>
+        <option value="5">Daylight</option>
+        <option value="6">Cloudy-daylight</option>
+        <option value="7">Twilight</option>
+        <option value="8">Shade</option>
+        <option value="9">Manual</option>
+      </select>
+    </div>
+    <div>
+      <!-- 
+      // saturation
+      // Property to adjust saturation value
+      // flags: readable, writable
+      // Float. Range: 0 - 2 
+      // Default: 1
+      -->
+      <label>saturation</label>
+      <input type="number" id="saturation" step="0.1" min="0" max="2" value="1" onchange="saturation_change()">
+    </div>
+    <div>
+      <!--       
+      // tnr-mode
+      // property to select temporal noise reduction mode
+      // flags: readable, writable
+      // Enum "GstNvArgusCamTNRMode" Default: 1, "NoiseReduction_Fast"
+      //     (0): NoiseReduction_Off - GST_NVCAM_NR_OFF
+      //     (1): NoiseReduction_Fast - GST_NVCAM_NR_FAST
+      //     (2): NoiseReduction_HighQuality - GST_NVCAM_NR_HIGHQUALITY 
+      -->
+      <label>tnr-mode</label>
+      <select id="tnr_mode" onchange="tnr_mode_change()">
+        <option value="0">Off</option>
+        <option value="1" selected="selected">Fast</option>
+        <option value="2">HighQuality</option>
+      </select>
+    </div>
+    <div>
+      <!-- 
+      // tnr-strength
+      // property to adjust temporal noise reduction strength
+      // flags: readable, writable
+      // Float. Range: -1 - 1 
+      // Default: -1  
+      -->
+      <label>tnr-strength</label>
+      <input type="number" id="tnr_strength" step="0.1" min="-1" max="1" value="-1"  onchange="tnr_strength_change()">
+    </div>
+    <div>
+      <!--       
+      // ee-mode
+      // property to select edge enhnacement mode
+      // flags: readable, writable
+      // Enum "GstNvArgusCamEEMode" Default: 1, "EdgeEnhancement_Fast"
+      //     (0): EdgeEnhancement_Off - GST_NVCAM_EE_OFF
+      //     (1): EdgeEnhancement_Fast - GST_NVCAM_EE_FAST
+      //     (2): EdgeEnhancement_HighQuality - GST_NVCAM_EE_HIGHQUALITY
+      -->
+      <label>ee-mode</label>
+      <select id="ee_mode" onchange="ee_mode_change()">
+        <option value="0">Off</option>
+        <option value="1" selected="selected">Fast</option>
+        <option value="2">HighQuality</option>
+      </select>
+    </div>
+    <div>
+      <!-- 
+      // ee-strength
+      // property to adjust edge enhancement strength
+      // flags: readable, writable
+      // Float. Range: -1 - 1 
+      // Default: -1 
+      -->
+      <label>ee-strength</label>
+      <input type="number" id="ee_strength" step="0.1" min="-1" max="1" value="-1" onchange="ee_strength_change()">
+    </div>
+    <div>
+      <!--       
+      // aeantibanding
+      // property to set the auto exposure antibanding mode
+      // flags: readable, writable
+      // Enum "GstNvArgusCamAeAntiBandingMode" Default: 1, "AeAntibandingMode_Auto"
+      //     (0): AeAntibandingMode_Off - GST_NVCAM_AEANTIBANDING_OFF
+      //     (1): AeAntibandingMode_Auto - GST_NVCAM_AEANTIBANDING_AUTO
+      //     (2): AeAntibandingMode_50HZ - GST_NVCAM_AEANTIBANDING_50HZ
+      //     (3): AeAntibandingMode_60HZ - GST_NVCAM_AEANTIBANDING_60HZ
+      -->
+      <label>aeantibanding</label>
+      <select id="aeantibanding" onchange="aeantibanding_change()">
+        <option value="0">Off</option>
+        <option value="1" selected="selected">Auto</option>
+        <option value="2">50Hz</option>
+        <option value="3">60Hz</option>
+      </select>
+    </div>
+    <div>
+      <!-- 
+      // exposurecompensation
+      // property to adjust exposure compensation
+      // flags: readable, writable
+      // Float. Range: -2 - 2 
+      // Default: 0 
+      -->
+      <label>exposurecompensation</label>
+      <input type="number" id="exposurecompensation" step="0.2" min="-2" max="2" value="0" onchange="exposure_compenstation_change()">
+    </div>
+    <div>
+      <!--       
+      // aelock
+      // set or unset the auto exposure lock
+      // flags: readable, writable
+      // Boolean. Default: false
+      -->
+      <input type="checkbox" id="aelock" name="aelock" onchange="aelock_change()">
+      <label for="aelock">aelock</label>
+    </div>
+    <div>
+      <!--       
+      // awblock
+      // set or unset the auto white balance lock
+      // flags: readable, writable
+      // Boolean. Default: false
+      -->
+      <input type="checkbox" id="awblock" name="awblock" onchange="awblock_change()">
+      <label for="awblock">awblock</label>
+    </div>
+    <div>
+      <button id="settings_concel" onclick="cancelSettings()">Close</button>
+    </div>
+  </div>
+  <div id="calib_popup">
+    <div id="calib_image_view">
+      <img id="calib_image" src="" />
+      <canvas id="roi_canvas"></canvas>
+    </div>
+    <div id="calib_control">
+      <button id="calib_start" onclick="startCalib()">Start</button>
+      <button id="calib_stop" onclick="stopCalib()">Stop</button>
+      <button id="calib_apply" disabled onclick="applyCalib()">Apply</button>
+      <button id="calib_cancel" onclick="cancelCalib()">Close</button>
+      <input type="number" id="calib_progress" value="0" min="0" max="100" readonly><label>%</label>
+      <input type="text" id="calib_msg" name="calib_msg" value="" readonly>
+    </div>
+  </div>
+  <div id="control">
+    <div class="control-panel align-left">
+      <select id="modesel">
+        <option value="0" selected="selected">Pano</option>
+        <option value="1">Sync</option>
+      </select>
+      <label class="checkbtn" id="recordingbtn">
+        <input type="checkbox" id="recordingcheck" onclick="enableRecording()">
+        <span>RECORDING</span>
+      </label>
+      <select id="footagesel">
+        <option value="" selected="selected">New Footage</option>
+      </select>
+      <label class="checkbutton" id="startbtn">
+        <input type="checkbox" id="startcheck" onclick="startRecord()">
+        <span>START</span>
+      </label>
+      <label class="checkbutton" id="pausebtn">
+        <input type="checkbox" id="pausecheck" onclick="pauseRecord()">
+        <span>PAUSE</span>
+      </label>
+    </div>
+    <div class="control-panel align-right">
+      <button id="calibbtn" onclick="showCalib()">Calib</button>
+      <button id="settingsbtn" onclick="showSettings()">Settings</button>
+    </div>
+  </div>
+</body>
+</html>
