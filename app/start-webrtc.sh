@@ -4,10 +4,9 @@ set -x
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # start nginx service
-NGINX_CONFIG="${CURRENT_DIR}/nginx/nginx.conf"
-NGINX_ROOT="${CURRENT_DIR}/nginx/www"
+NGINX_ROOT="${CURRENT_DIR}/nginx"
 mkdir -p "/home/pi/nginx"
-nginx -c "${NGINX_CONFIG}" -p "${NGINX_ROOT}"
+nginx -c "${NGINX_ROOT}/nginx.conf" -p "${NGINX_ROOT}"
 
 # start janus
 JANUS_CONFIG="${CURRENT_DIR}/janus"

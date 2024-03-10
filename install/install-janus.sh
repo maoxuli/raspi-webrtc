@@ -13,8 +13,13 @@ sudo apt-get update && sudo apt-get install -y \
     libmicrohttpd-dev \
     libcurl4 \
     libcurl4-openssl-dev \
+    nginx \
 && apt-get clean \
 && rm -rf /var/lib/apt/lists/* 
+
+# disable default nginx service 
+sudo systemctl stop nginx.service 
+sudo systemctl disable nginx.service
 
 # ## libnice 0.1.18 from source code 
 # git clone --depth 1 --branch 0.1.18 https://gitlab.freedesktop.org/libnice/libnice.git

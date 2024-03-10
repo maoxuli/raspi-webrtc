@@ -56,7 +56,7 @@ var bitrateTimer = null;
 var spinner = null;
 
 // the default rtp test stream id 
-var selectedStream = 99;
+var selectedStream = 1;
 
 $(document).ready(function() {
 	// Initialize the library (all console debuggers enabled)
