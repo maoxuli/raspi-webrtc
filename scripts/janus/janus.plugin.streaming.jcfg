@@ -138,15 +138,18 @@ rtp-sample: {
 	id = 1
 	description = "Opus/VP8 live stream coming from external source"
 	metadata = "You can use this metadata section to put any info you want!"
-	audio = true
+	#audio = true
 	video = true
-	audioport = 5002
-	audiopt = 111
-	audiocodec = "opus"
+	#audioport = 5002
+	#audiopt = 111
+	#audiocodec = "opus"
 	videoport = 5004
-	videopt = 100
-	videocodec = "vp8"
-	secret = "adminpwd"
+	videopt = 96
+	#videocodec = "vp8"
+	videortpmap = "H264/90000"
+	#videofmtp = "packetization-mode=1"
+	videofmtp = "profile-level-id=42e01f;packetization-mode=1"
+	#secret = "adminpwd"
 }
 
 #

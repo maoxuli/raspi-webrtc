@@ -414,6 +414,7 @@ nat: {
 # plugins are enabled and loaded at startup.
 plugins: {
 	#disable = "libjanus_echotest.so,libjanus_recordplay.so"
+	disable = "libjanus_echotest.so,libjanus_nosip.so,libjanus_recordplay.so,libjanus_textroom.so,libjanus_videocall.so,libjanus_videoroom.so"
 }
 
 # You can choose which of the available transports should be enabled or
@@ -423,6 +424,7 @@ plugins: {
 # transports are enabled and loaded at startup.
 transports: {
 	#disable = "libjanus_rabbitmq.so"
+	disable = "libjanus_pfunix.so"
 }
 
 # As a core feature, Janus can log either on the standard output, or to
