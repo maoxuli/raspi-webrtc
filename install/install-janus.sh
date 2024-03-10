@@ -1,11 +1,12 @@
 #!/usr/bin/env bash 
 set -x 
 
-sudo apt-get update && apt-get install -y \
+sudo apt-get update && sudo apt-get install -y \
     autogen \
     autoconf \
     automake \
     libtool \
+    pkg-config \
     libconfig-dev \
     libssl-dev \
     libjansson-dev \
