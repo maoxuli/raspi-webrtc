@@ -11,6 +11,7 @@ sudo apt-get update && sudo apt-get install -y \
     libssl-dev \
     libjansson-dev \
     libmicrohttpd-dev \
+    libcurl4 \
     libcurl4-openssl-dev \
 && apt-get clean \
 && rm -rf /var/lib/apt/lists/* 
