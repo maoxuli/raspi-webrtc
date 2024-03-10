@@ -6,6 +6,7 @@ CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # start nginx service
 NGINX_CONFIG="${CURRENT_DIR}/nginx/nginx.conf"
 NGINX_ROOT="${CURRENT_DIR}/nginx/www"
+mkdir -p "/home/pi/nginx"
 nginx -c "${NGINX_CONFIG}" -p "${NGINX_ROOT}"
 
 # start janus
